@@ -1,7 +1,7 @@
 import requests
 import json
 
-SLEEPER_BASE_URL = "https://api.sleeper.app/v1"
+from config import SLEEPER_BASE_URL
 
 def get_all_players():
     url = f"{SLEEPER_BASE_URL}/players/nfl"
