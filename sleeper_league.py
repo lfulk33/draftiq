@@ -1,6 +1,6 @@
 import requests
 import json
-from config import SLEEPER_BASE_URL, SLEEPER_USERNAME, SEASON, LEAGUE_ID
+from config import SLEEPER_BASE_URL, SLEEPER_USERNAME, SEASON
 
 def get_user(username):
     url = f"{SLEEPER_BASE_URL}/user/{username}"
