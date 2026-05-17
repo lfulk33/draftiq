@@ -40,6 +40,9 @@ def get_available_rookies(players, picks):
         and p.get("years_exp") == 0
     }
 
+def count_my_picks(picks, my_roster_id):
+    return sum(1 for p in picks if p["roster_id"] == my_roster_id)
+    
 if __name__ == "__main__":
     league_id = "1312068664308019200"
     

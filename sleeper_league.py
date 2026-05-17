@@ -33,6 +33,10 @@ def get_scoring_settings(league_id):
         "scoring_settings": league.get("scoring_settings")
     }
 
+def get_taxi_count(my_roster):
+    taxi = my_roster.get("taxi") or []
+    return len(taxi)
+    
 if __name__ == "__main__":
     print("Fetching user...")
     user = get_user(SLEEPER_USERNAME)
