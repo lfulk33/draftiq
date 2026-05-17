@@ -26,6 +26,13 @@ def get_rosters(league_id):
     response.raise_for_status()
     return response.json()
 
+def get_scoring_settings(league_id):
+    league = get_league(league_id)
+    return {
+        "roster_positions": league.get("roster_positions"),
+        "scoring_settings": league.get("scoring_settings")
+    }
+
 if __name__ == "__main__":
     print("Fetching user...")
     user = get_user(SLEEPER_USERNAME)
