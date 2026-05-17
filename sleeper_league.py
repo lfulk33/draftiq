@@ -42,6 +42,9 @@ def get_league_users(league_id):
     response = requests.get(url)
     response.raise_for_status()
     return response.json()
+
+def get_taxi_players(my_roster):
+    return my_roster.get("taxi") or []
     
 if __name__ == "__main__":
     print("Fetching user...")

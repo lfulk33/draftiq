@@ -4,7 +4,6 @@ import time
 from datetime import datetime
 from sleeper_draft import get_picks, get_available_rookies, get_available_players, count_my_picks
 from sleeper_league import get_rosters, get_league, get_taxi_count, get_league_users
-from draft_advisor import get_recommendation
 from poller import is_rookie_draft
 from config import SLEEPER_USERNAME
 
@@ -66,37 +65,134 @@ def build_league_context(league_detail, draft_detail, my_roster, picks, my_roste
         "my_existing_roster": my_existing_players
     }
 
-def render_roster(my_roster, players):
-    st.subheader("📊 Your Current Roster")
-    
-    positions = {"QB": [], "RB": [], "WR": [], "TE": [], "Other": []}
-    
-    for pid in my_roster.get("players") or []:
+def render_roster(my_roster, players, league_detail, sim_active, sim_taxi):
+    st.subheader("📊 Recommended Roster")
+    st.caption("🟢 Starter   ⬜ Bench   🚕 Taxi")
+
+    roster_positions = league_detail.get("roster_positions", [])
+    active_ids = set(sim_active.keys())
+    taxi_ids = set(sim_taxi.keys())
+
+    required = {"QB": 0, "RB": 0, "WR": 0, "TE": 0, "FLEX": 0, "SUPER_FLEX": 0}
+    for pos in roster_positions:
+        if pos in required:
+            required[pos] += 1
+
+    enriched = []
+    for pid in active_ids:
         player = players.get(pid, {})
         if not player:
             continue
-        pos = player.get("position", "Other")
-        if pos not in positions:
-            pos = "Other"
-        positions[pos].append({
+        enriched.append({
+            "id": pid,
             "name": player.get("full_name", "Unknown"),
+            "position": player.get("position", "?"),
             "age": player.get("fc_age") or player.get("age", "?"),
-            "value": player.get("fc_value", "unranked")
+            "value": player.get("fc_value", 0) if isinstance(player.get("fc_value"), int) else 0,
+            "years_exp": player.get("years_exp", 99),
+            "starter": False
         })
 
-    cols = st.columns(4)
-    for i, pos in enumerate(["QB", "RB", "WR", "TE"]):
+    enriched.sort(key=lambda x: x["value"], reverse=True)
+
+    slots_filled = {"QB": 0, "RB": 0, "WR": 0, "TE": 0, "FLEX": 0, "SUPER_FLEX": 0}
+    starter_ids = set()
+
+    for player in enriched:
+        pos = player["position"]
+        if pos in slots_filled and slots_filled[pos] < required[pos]:
+            slots_filled[pos] += 1
+            starter_ids.add(player["id"])
+
+    flex_eligible = {"RB", "WR", "TE"}
+    for player in enriched:
+        if player["id"] not in starter_ids and slots_filled["FLEX"] < required["FLEX"] and player["position"] in flex_eligible:
+            slots_filled["FLEX"] += 1
+            starter_ids.add(player["id"])
+
+    for player in enriched:
+        if player["id"] not in starter_ids and slots_filled["SUPER_FLEX"] < required["SUPER_FLEX"]:
+            slots_filled["SUPER_FLEX"] += 1
+            starter_ids.add(player["id"])
+
+    for player in enriched:
+        player["starter"] = player["id"] in starter_ids
+
+    pos_order = ["QB", "RB", "WR", "TE"]
+    all_positions = sorted(set(p["position"] for p in enriched) - {"?"})
+    extra_positions = [p for p in all_positions if p not in pos_order]
+    columns = pos_order + extra_positions
+
+    cols = st.columns(len(columns))
+
+    for i, pos in enumerate(columns):
         with cols[i]:
             st.write(f"**{pos}**")
-            players_at_pos = sorted(
-                positions[pos],
-                key=lambda x: x["value"] if isinstance(x["value"], int) else 0,
-                reverse=True
-            )
-            for p in players_at_pos:
+            pos_players = [p for p in enriched if p["position"] == pos]
+            for p in pos_players:
                 age_str = f"Age {p['age']}" if p['age'] != "?" else "Age ?"
-                value_str = f"Val {p['value']}" if p['value'] != "unranked" else "unranked"
-                st.caption(f"{p['name']} — {age_str} — {value_str}")
+                val_str = f"Val {p['value']}" if p['value'] else "unranked"
+                label = f"{p['name']}\n{age_str} | {val_str}"
+                if p["starter"]:
+                    st.success(label)
+                else:
+                    st.info(label)
+
+    if taxi_ids:
+        st.divider()
+        st.write("**🚕 Taxi Squad**")
+        taxi_players = []
+        for pid in taxi_ids:
+            player = players.get(pid, {})
+            if not player:
+                continue
+            value = player.get("fc_value", 0) if isinstance(player.get("fc_value"), int) else 0
+            years_exp = player.get("years_exp", 99)
+            taxi_years = league_detail["settings"].get("taxi_years", 3)
+            note = None
+            if value > 3000:
+                note = "⬆️ Consider promoting"
+            elif years_exp > taxi_years:
+                note = "✂️ Cut candidate"
+            taxi_players.append({
+                "name": player.get("full_name", "Unknown"),
+                "position": player.get("position", "?"),
+                "age": player.get("fc_age") or player.get("age", "?"),
+                "value": value,
+                "note": note
+            })
+
+        taxi_cols = st.columns(max(len(taxi_players), 1))
+        for i, p in enumerate(taxi_players):
+            with taxi_cols[i]:
+                label = f"{p['name']} ({p['position']})\nAge {p['age']} | Val {p['value']}"
+                if p["note"]:
+                    if "promoting" in p["note"]:
+                        st.warning(f"{label}\n{p['note']}")
+                    else:
+                        st.error(f"{label}\n{p['note']}")
+                else:
+                    st.info(f"🚕 {label}")
+
+def render_roster_recommendations(recommendations):
+    if not recommendations:
+        return
+
+    st.subheader("📋 Roster Action Items")
+
+    for rec in recommendations:
+        action = rec["action"]
+        severity = rec["severity"]
+        label = f"**{rec['player']} ({rec['position']})** — {action}: {rec['note']}"
+
+        if severity == "success":
+            st.success(label)
+        elif severity == "warning":
+            st.warning(label)
+        elif severity == "error":
+            st.error(label)
+        else:
+            st.info(label)
 
 def render_setup():
     st.title("🏈 Draft Assistant")
@@ -178,19 +274,34 @@ def render_setup():
                     st.error(f"Error connecting: {e}")
 
 def render_draft():
+    from sleeper_league import get_rosters, get_taxi_players
+    from draft_advisor import get_recommendation, get_roster_recommendations, calculate_starter_ids
+
     players = st.session_state.players
     draft_id = st.session_state.draft_id
     my_roster_id = st.session_state.my_roster_id
-    my_roster = st.session_state.my_roster
     league_detail = st.session_state.league_detail
     draft_detail = st.session_state.draft_detail
     roster_to_team = st.session_state.roster_to_team
+
+    rosters = get_rosters(st.session_state.league_id)
+    my_roster = next(r for r in rosters if r["roster_id"] == my_roster_id)
 
     picks = get_picks(draft_id)
     current_count = len(picks)
     rookie_draft = is_rookie_draft(draft_detail)
     available = get_available_rookies(players, picks) if rookie_draft else get_available_players(players, picks)
     league_context = build_league_context(league_detail, draft_detail, my_roster, picks, my_roster_id, players)
+
+    my_draft_picks = [p["player_id"] for p in picks if p["roster_id"] == my_roster_id]
+    reserve_ids = set(my_roster.get("reserve") or [])
+    taxi_ids = set(get_taxi_players(my_roster))
+    all_ids = set(my_roster.get("players") or [])
+    if my_draft_picks:
+        all_ids.update(my_draft_picks)
+    active_ids = all_ids - taxi_ids - reserve_ids
+    starter_ids = calculate_starter_ids(active_ids, players, league_detail)
+    recommendations, sim_active, sim_taxi = get_roster_recommendations(my_roster, players, league_detail, my_draft_picks, starter_ids)
 
     if current_count > st.session_state.last_pick_count:
         st.session_state.last_pick_count = current_count
@@ -236,10 +347,10 @@ def render_draft():
         st.subheader("🤖 Claude's Recommendation")
         if st.session_state.recommendation:
             rec = st.session_state.recommendation
-            
+
             confidence = rec.get("confidence_tier", "unknown")
             gap = rec.get("confidence_gap")
-            
+
             if confidence == "high":
                 st.success(f"### {rec['recommendation']} ({rec['position']})")
                 st.success(f"🟢 High confidence — value gap of {gap} points over next best")
@@ -267,7 +378,8 @@ def render_draft():
                 st.rerun()
 
     st.divider()
-    render_roster(my_roster, players)
+    render_roster(my_roster, players, league_detail, sim_active, sim_taxi)
+    render_roster_recommendations(recommendations)
 
     st.sidebar.title("⚙️ Settings")
     st.sidebar.write(f"**League:** {st.session_state.selected_league['name']}")

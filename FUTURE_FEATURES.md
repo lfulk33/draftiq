@@ -3,6 +3,7 @@
 ## Roster View
 - Toggle between dynasty value view and redraft value view for lineup suggestions
 - Redraft mode would use weekly projections instead of fc_value for lineup decisions
+- Optimize roster refresh to only re-fetch when a new pick by the user is detected, rather than every poll cycle, to reduce Sleeper API calls
 
 ## Draft Assistant
 - Manual pick entry mode for ESPN and Yahoo leagues (no API)
