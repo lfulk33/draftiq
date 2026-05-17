@@ -36,6 +36,12 @@ def get_scoring_settings(league_id):
 def get_taxi_count(my_roster):
     taxi = my_roster.get("taxi") or []
     return len(taxi)
+
+def get_league_users(league_id):
+    url = f"{SLEEPER_BASE_URL}/league/{league_id}/users"
+    response = requests.get(url)
+    response.raise_for_status()
+    return response.json()
     
 if __name__ == "__main__":
     print("Fetching user...")
