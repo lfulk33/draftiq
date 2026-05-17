@@ -7,12 +7,20 @@ You reason about long-term player value, age curves, and positional scarcity.
 You give concise, confident recommendations with clear reasoning.
 Always respond in valid JSON only. No preamble, no markdown, no explanation outside the JSON."""
 
+def get_flex_eligible(slot_name):
+    known = {
+        "FLEX": {"RB", "WR", "TE"},
+        "SUPER_FLEX": {"QB", "RB", "WR", "TE"},
+        "REC_FLEX": {"WR", "RB", "TE"},
+        "WRRB_FLEX": {"WR", "RB"},
+    }
+    if slot_name in known:
+        return known[slot_name]
+    parts = slot_name.replace("_FLEX", "").split("_")
+    return set(parts)
+
 def calculate_starter_ids(active_ids, players, league_detail):
     roster_positions = league_detail.get("roster_positions", [])
-    required = {"QB": 0, "RB": 0, "WR": 0, "TE": 0, "FLEX": 0, "SUPER_FLEX": 0}
-    for pos in roster_positions:
-        if pos in required:
-            required[pos] += 1
 
     enriched = []
     for pid in active_ids:
@@ -27,25 +35,29 @@ def calculate_starter_ids(active_ids, players, league_detail):
 
     enriched.sort(key=lambda x: x["value"], reverse=True)
 
-    slots_filled = {"QB": 0, "RB": 0, "WR": 0, "TE": 0, "FLEX": 0, "SUPER_FLEX": 0}
     starter_ids = set()
+    single_positions = {"QB", "RB", "WR", "TE", "K", "DEF"}
+    slot_counts = {}
+    for slot in roster_positions:
+        if slot in single_positions:
+            slot_counts[slot] = slot_counts.get(slot, 0) + 1
+
+    slots_remaining = dict(slot_counts)
 
     for player in enriched:
         pos = player["position"]
-        if pos in slots_filled and slots_filled[pos] < required[pos]:
-            slots_filled[pos] += 1
+        if pos in slots_remaining and slots_remaining[pos] > 0:
             starter_ids.add(player["id"])
+            slots_remaining[pos] -= 1
 
-    flex_eligible = {"RB", "WR", "TE"}
-    for player in enriched:
-        if player["id"] not in starter_ids and slots_filled["FLEX"] < required["FLEX"] and player["position"] in flex_eligible:
-            slots_filled["FLEX"] += 1
-            starter_ids.add(player["id"])
+    for slot in roster_positions:
+        if slot not in single_positions and slot != "BN":
+            eligible = get_flex_eligible(slot)
+            for player in enriched:
+                if player["id"] not in starter_ids and player["position"] in eligible:
+                    starter_ids.add(player["id"])
+                    break
 
-    for player in enriched:
-        if player["id"] not in starter_ids and slots_filled["SUPER_FLEX"] < required["SUPER_FLEX"]:
-            slots_filled["SUPER_FLEX"] += 1
-            starter_ids.add(player["id"])
 
     return starter_ids
 
@@ -154,21 +166,167 @@ def calculate_confidence(recommendation_name, available, alternatives):
 
     return tier, gap
 
-def get_roster_recommendations(my_roster, players, league_detail, my_draft_picks, starter_ids):
-    from sleeper_league import get_taxi_players
+def build_depth_chart(sim_active, starter_ids, players, league_detail):
+    roster_positions = league_detail.get("roster_positions", [])
+    position_starter_counts = {}
+    for pos in roster_positions:
+        if pos in {"QB", "RB", "WR", "TE", "K", "DEF"}:
+            position_starter_counts[pos] = position_starter_counts.get(pos, 0) + 1
 
-    taxi_ids = set(get_taxi_players(my_roster))
-    reserve_ids = set(my_roster.get("reserve") or [])
-    active_ids = set(my_roster.get("players") or [])
-    if my_draft_picks:
-        active_ids.update(my_draft_picks)
-    active_ids = active_ids - taxi_ids - reserve_ids
+    depth_chart = {}
+    for pid, p in sim_active.items():
+        pos = p.get("position", "?")
+        if pos not in depth_chart:
+            depth_chart[pos] = []
+        depth_chart[pos].append({
+            "id": pid,
+            "name": p.get("name"),
+            "value": p.get("value", 0),
+            "age": p.get("age"),
+            "years_exp": p.get("years_exp"),
+            "on_ir": p.get("on_ir", False),
+            "is_starter": pid in starter_ids
+        })
+
+    for pos in depth_chart:
+        depth_chart[pos].sort(key=lambda x: x["value"], reverse=True)
+
+    return depth_chart, position_starter_counts
+
+def get_claude_roster_recommendation(rookie, sim_active, sim_taxi, starter_ids, league_detail, players, reserve_ids):
+    depth_chart, position_starter_counts = build_depth_chart(sim_active, starter_ids, players, league_detail)
 
     taxi_slots_total = league_detail["settings"].get("taxi_slots", 0)
     taxi_years = league_detail["settings"].get("taxi_years", 3)
     taxi_allow_vets = league_detail["settings"].get("taxi_allow_vets", 0)
     roster_positions = league_detail.get("roster_positions", [])
-    roster_max = len(roster_positions)
+    roster_max = len(roster_positions) + len(reserve_ids)
+
+    open_taxi = taxi_slots_total - len(sim_taxi)
+    roster_count = len(sim_active)
+    roster_over = max(0, roster_count - roster_max)
+    taxi_eligible = rookie["years_exp"] == 0 and taxi_allow_vets == 0
+
+    taxi_summary = [
+        {"name": p["name"], "position": p["position"], "value": p["value"], "years_exp": p["years_exp"]}
+        for p in sorted(sim_taxi.values(), key=lambda x: x["value"])
+    ]
+
+    rookie_position_depth = depth_chart.get(rookie["position"], [])
+    starter_count_at_pos = position_starter_counts.get(rookie["position"], 0)
+
+    prompt = f"""You are a dynasty fantasy football roster management expert.
+
+A player has just been drafted and you need to recommend exactly where they go on the roster and what cascading moves are needed.
+
+DRAFTED PLAYER:
+{json.dumps({
+    "name": rookie["name"],
+    "position": rookie["position"],
+    "age": rookie["age"],
+    "dynasty_value": rookie["value"],
+    "years_exp": rookie["years_exp"],
+    "taxi_eligible": taxi_eligible
+}, indent=2)}
+
+THEIR POSITION DEPTH CHART (your current roster at {rookie["position"]}, sorted by dynasty value):
+{json.dumps(rookie_position_depth, indent=2)}
+
+STARTERS AT {rookie["position"]}: {starter_count_at_pos}
+
+FULL ROSTER SUMMARY BY POSITION:
+{json.dumps({pos: [{"name": p["name"], "value": p["value"], "is_starter": p["is_starter"], "on_ir": p["on_ir"]} for p in pos_players] for pos, pos_players in depth_chart.items()}, indent=2)}
+MANDATORY CUT CANDIDATE (if a cut is required):
+{json.dumps(
+    sorted(
+        [{"name": p["name"], "position": p["position"], "value": p["value"], "location": "active_bench"} 
+         for p in sim_active.values() 
+         if p["id"] not in starter_ids and not p.get("on_ir")] +
+        [{"name": p["name"], "position": p["position"], "value": p["value"], "years_exp": p["years_exp"], "location": "taxi"} 
+         for p in sim_taxi.values()],
+        key=lambda x: x["value"]
+    )[0] if sim_active or sim_taxi else {},
+    indent=2
+)}
+THIS IS THE PLAYER TO CUT if a cut is needed. Do not cut anyone else.
+
+CURRENT TAXI SQUAD:
+{json.dumps(taxi_summary, indent=2)}
+
+ROSTER SITUATION:
+- Current active roster count: {roster_count}
+- Roster max (including IR): {roster_max}
+- Roster over limit by: {roster_over}
+- NOTE: If this player goes to TAXI, that counts as leaving the active roster. Only recommend a cut if the roster is STILL over limit after placing this player.
+- NOTE: If this player goes to ACTIVE_BENCH and roster is over limit, recommend exactly ONE cut.
+- NOTE: If roster is at or under the limit after placing this player, no cuts are needed.
+- Open taxi slots: {open_taxi}
+- Taxi years allowed: {taxi_years}
+- Taxi eligibility: {"Rookie only (years_exp = 0)" if taxi_allow_vets == 0 else "Veterans allowed"}
+
+LEAGUE ROSTER CONSTRUCTION:
+{json.dumps(roster_positions, indent=2)}
+
+REASONING GUIDELINES:
+- Consider dynasty value AND positional depth. A player ranked 4th at their position in a 2-starter league will rarely play.
+- For each position, count the starters (shown as is_starter=true in the depth chart). The player immediately after the last starter is the PRIMARY BACKUP who would start on bye weeks or injuries.
+- MANDATORY RULE: If this player's dynasty value exceeds the PRIMARY BACKUP at their position (the player immediately after the last starter), you MUST recommend ACTIVE_BENCH. Taxi eligibility, open taxi slots, and roster limit do not override this rule. A player who is better than your primary backup will contribute when the starter is injured or on bye and must be on the active roster.
+- If the roster is over the limit and the player must go to ACTIVE_BENCH, recommend exactly ONE cut from the MANDATORY CUT CANDIDATE.
+- TAXI is only for players who rank below the primary backup at their position.
+- If the player goes to TAXI and taxi is full: 
+  Step 1: Cut the player identified in MANDATORY CUT CANDIDATE above.
+  Step 2: If the mandatory cut came from the active bench (location = "active_bench"), taxi is still full. You MUST also promote the taxi player with the fewest remaining taxi years (taxi_years_allowed minus years_exp) to active bench. Use dynasty value as tiebreaker. This promotion frees the taxi slot for the incoming player. Include BOTH the cut AND the promotion as cascading moves.
+  Step 3: If the mandatory cut came from taxi (location = "taxi"), the slot is now open directly. No promotion needed.
+- If the player goes to ACTIVE_BENCH and roster is over limit: cut the player identified in MANDATORY CUT CANDIDATE above. Do not choose a different player to cut.
+- If the player goes to ACTIVE_BENCH and roster is over limit, recommend cutting the lowest value non-starter non-IR active roster player. Do not touch the taxi squad for this cut.
+- If the player goes to ACTIVE_BENCH and roster is at or under the limit, no cuts are needed.
+- If the player goes to TAXI and taxi has open slots, no cuts are needed regardless of active roster count.
+- Do not attempt to solve the entire roster situation in one move. Each drafted player triggers exactly one cut if needed.
+- If the player goes to active roster and bumps someone to taxi eligibility, note that too.
+- Consider age curves: young high-value players deserve roster spots even if not immediate contributors.
+- IR players count toward roster construction but cannot be cut for roster management.
+
+Respond with this exact JSON structure:
+{{
+    "rookie_action": "STARTER" or "ACTIVE_BENCH" or "TAXI" or "CUT",
+    "reasoning": "2-3 sentences explaining the decision considering depth chart, dynasty value, and taxi eligibility",
+    "cascading_moves": [
+        {{
+            "player_name": "Full Name",
+            "action": "CUT" or "TAXI" or "PROMOTE_TO_BENCH",
+            "reason": "One sentence explanation"
+        }}
+    ]
+}}
+
+If no cascading moves are needed, return an empty array for cascading_moves.
+"""
+    response = get_completion(prompt, system="You are a dynasty fantasy football expert. Always respond in valid JSON only. No preamble, no markdown.")
+    try:
+        clean = response.strip().removeprefix("```json").removesuffix("```").strip()
+        # Find the first complete JSON object only
+        decoder = json.JSONDecoder()
+        result, _ = decoder.raw_decode(clean)
+        return result
+    except (json.JSONDecodeError, ValueError):
+        # Try extracting just the first { } block
+        start = clean.find("{")
+        end = clean.rfind("}") + 1
+        if start >= 0 and end > start:
+            return json.loads(clean[start:end])
+        raise
+
+def get_roster_recommendations(my_roster, players, league_detail, my_draft_picks, starter_ids):
+    from sleeper_league import get_taxi_players
+
+    taxi_ids = set(get_taxi_players(my_roster))
+    reserve_ids = set(my_roster.get("reserve") or [])
+
+    active_ids = set(my_roster.get("players") or [])
+    active_ids = active_ids - taxi_ids
+    
+    roster_positions = league_detail.get("roster_positions", [])
+    roster_max = len(roster_positions) + len(reserve_ids)
 
     def enrich(pid):
         p = players.get(pid, {})
@@ -180,7 +338,8 @@ def get_roster_recommendations(my_roster, players, league_detail, my_draft_picks
             "position": p.get("position", "?"),
             "age": p.get("fc_age") or p.get("age", "?"),
             "value": p.get("fc_value", 0) if isinstance(p.get("fc_value"), int) else 0,
-            "years_exp": p.get("years_exp", 99)
+            "years_exp": p.get("years_exp", 99),
+            "on_ir": pid in reserve_ids
         }
 
     sim_taxi = {p["id"]: p for p in [enrich(pid) for pid in taxi_ids] if p}
@@ -195,181 +354,48 @@ def get_roster_recommendations(my_roster, players, league_detail, my_draft_picks
     recommendations = []
 
     for rookie in new_rookies:
-        open_taxi = taxi_slots_total - len(sim_taxi)
-        roster_count = len(sim_active)
-        roster_over = max(0, roster_count - roster_max)
-
-        bench_players = sorted(
-            [p for p in sim_active.values() if p["id"] not in starter_ids and p["id"] != rookie["id"]],
-            key=lambda x: x["value"]
+        rec = get_claude_roster_recommendation(
+            rookie, sim_active, sim_taxi, starter_ids,
+            league_detail, players, reserve_ids
         )
-        taxi_players = sorted(sim_taxi.values(), key=lambda x: x["value"])
-        worst_bench = bench_players[0] if bench_players else None
-        worst_taxi = taxi_players[0] if taxi_players else None
-        is_starter = rookie["id"] in starter_ids
-        taxi_eligible = rookie["years_exp"] == 0 and taxi_allow_vets == 0
 
-        if is_starter:
-            recommendations.append({
-                "player": rookie["name"],
-                "position": rookie["position"],
-                "action": "ACTIVE STARTER",
-                "note": f"High value ({rookie['value']}) earns a starting spot.",
-                "severity": "success"
-            })
-            continue
+        recommendations.append({
+            "player": rookie["name"],
+            "position": rookie["position"],
+            "action": rec.get("rookie_action", "UNKNOWN"),
+            "reasoning": rec.get("reasoning", ""),
+            "cascading_moves": rec.get("cascading_moves", []),
+            "severity": {
+                "STARTER": "success",
+                "ACTIVE_BENCH": "info",
+                "TAXI": "info",
+                "CUT": "error"
+            }.get(rec.get("rookie_action", ""), "info")
+        })
 
-        if roster_over <= 0:
-            if taxi_eligible and open_taxi > 0:
-                recommendations.append({
-                    "player": rookie["name"],
-                    "position": rookie["position"],
-                    "action": "TAXI",
-                    "note": f"Developmental stash. Move to taxi ({open_taxi} slot(s) available).",
-                    "severity": "info"
-                })
-                sim_taxi[rookie["id"]] = rookie
-                sim_active.pop(rookie["id"], None)
-            else:
-                recommendations.append({
-                    "player": rookie["name"],
-                    "position": rookie["position"],
-                    "action": "ACTIVE BENCH",
-                    "note": f"Keep on active roster as a bench contributor (Val {rookie['value']}).",
-                    "severity": "info"
-                })
-            continue
-
-        # Check taxi first even if over roster limit
-        if taxi_eligible and open_taxi > 0:
-            recommendations.append({
-                "player": rookie["name"],
-                "position": rookie["position"],
-                "action": "TAXI",
-                "note": f"Developmental stash. Move to taxi ({open_taxi} slot(s) available). Reduces roster by 1.",
-                "severity": "info"
-            })
+        # Update sim state based on Claude's decision
+        action = rec.get("rookie_action")
+        if action == "TAXI":
             sim_taxi[rookie["id"]] = rookie
-            sim_active.pop(rookie["id"], None)
-            continue
+        elif action in ("STARTER", "ACTIVE_BENCH"):
+            sim_active[rookie["id"]] = rookie
+        elif action == "CUT":
+            pass  # stays out of sim_active
 
-        if taxi_eligible:
-            if worst_taxi and rookie["value"] > worst_taxi["value"]:
-                if worst_taxi["value"] > (worst_bench["value"] if worst_bench else 0):
-                    recommendations.append({
-                        "player": rookie["name"],
-                        "position": rookie["position"],
-                        "action": "TAXI",
-                        "note": f"Move to taxi. {worst_taxi['name']} (Val {worst_taxi['value']}) moves to bench.",
-                        "severity": "info"
-                    })
-                    recommendations.append({
-                        "player": worst_taxi["name"],
-                        "position": worst_taxi["position"],
-                        "action": "PROMOTE TO BENCH",
-                        "note": f"Move from taxi to active bench. Worth more than worst bench player {worst_bench['name'] if worst_bench else 'none'} (Val {worst_bench['value'] if worst_bench else 0}).",
-                        "severity": "warning"
-                    })
-                    if worst_bench:
-                        recommendations.append({
-                            "player": worst_bench["name"],
-                            "position": worst_bench["position"],
-                            "action": "CUT",
-                            "note": f"Lowest value bench player (Val {worst_bench['value']}). Cut to make room.",
-                            "severity": "error"
-                        })
-                        sim_active.pop(worst_bench["id"], None)
-                    sim_taxi.pop(worst_taxi["id"], None)
-                    sim_active[worst_taxi["id"]] = worst_taxi
-                    sim_taxi[rookie["id"]] = rookie
-                    sim_active.pop(rookie["id"], None)
-                else:
-                    recommendations.append({
-                        "player": rookie["name"],
-                        "position": rookie["position"],
-                        "action": "TAXI",
-                        "note": f"Move to taxi. Cut {worst_taxi['name']} (Val {worst_taxi['value']}), lowest value taxi player.",
-                        "severity": "info"
-                    })
-                    recommendations.append({
-                        "player": worst_taxi["name"],
-                        "position": worst_taxi["position"],
-                        "action": "CUT",
-                        "note": f"Lowest value taxi player (Val {worst_taxi['value']}). Cut to make room for {rookie['name']}.",
-                        "severity": "error"
-                    })
-                    sim_taxi.pop(worst_taxi["id"], None)
-                    sim_taxi[rookie["id"]] = rookie
-                    sim_active.pop(rookie["id"], None)
-            else:
-                if worst_bench and rookie["value"] > worst_bench["value"]:
-                    recommendations.append({
-                        "player": rookie["name"],
-                        "position": rookie["position"],
-                        "action": "ACTIVE BENCH",
-                        "note": f"Not worth a taxi spot over current taxi players. Keep on bench (Val {rookie['value']}).",
-                        "severity": "info"
-                    })
-                    recommendations.append({
-                        "player": worst_bench["name"],
-                        "position": worst_bench["position"],
-                        "action": "CUT",
-                        "note": f"Lowest value bench player (Val {worst_bench['value']}). Cut to make room.",
-                        "severity": "error"
-                    })
-                    sim_active.pop(worst_bench["id"], None)
-                else:
-                    recommendations.append({
-                        "player": rookie["name"],
-                        "position": rookie["position"],
-                        "action": "CUT CANDIDATE",
-                        "note": f"Worth less than worst bench (Val {worst_bench['value'] if worst_bench else 0}) and worst taxi (Val {worst_taxi['value'] if worst_taxi else 0}). Consider cutting.",
-                        "severity": "error"
-                    })
-                    sim_active.pop(rookie["id"], None)
-        else:
-            if worst_bench and rookie["value"] > worst_bench["value"]:
-                recommendations.append({
-                    "player": rookie["name"],
-                    "position": rookie["position"],
-                    "action": "ACTIVE BENCH",
-                    "note": f"Not taxi eligible. Keep on bench (Val {rookie['value']}).",
-                    "severity": "info"
-                })
-                recommendations.append({
-                    "player": worst_bench["name"],
-                    "position": worst_bench["position"],
-                    "action": "CUT",
-                    "note": f"Lowest value bench player (Val {worst_bench['value']}). Cut to make room.",
-                    "severity": "error"
-                })
-                sim_active.pop(worst_bench["id"], None)
-            else:
-                recommendations.append({
-                    "player": rookie["name"],
-                    "position": rookie["position"],
-                    "action": "CUT CANDIDATE",
-                    "note": f"Not taxi eligible and worth less than worst bench player (Val {worst_bench['value'] if worst_bench else 0}). Consider cutting.",
-                    "severity": "error"
-                })
-                sim_active.pop(rookie["id"], None)
-
-    for p in sorted(sim_taxi.values(), key=lambda x: x["value"]):
-        if p["years_exp"] > taxi_years:
-            recommendations.append({
-                "player": p["name"],
-                "position": p["position"],
-                "action": "TAXI EXPIRED",
-                "note": f"Exceeded taxi eligibility ({p['years_exp']} years exp, max {taxi_years}). Must be promoted or cut.",
-                "severity": "error"
-            })
-        elif p["value"] > 3000:
-            recommendations.append({
-                "player": p["name"],
-                "position": p["position"],
-                "action": "CONSIDER PROMOTING",
-                "note": f"Dynasty value ({p['value']}) suggests this player is ready to contribute. Consider promoting to active roster.",
-                "severity": "warning"
-            })
+        # Apply cascading moves to sim state
+        for move in rec.get("cascading_moves", []):
+            move_name = move.get("player_name", "")
+            move_action = move.get("action", "")
+            matched = next((p for p in list(sim_active.values()) + list(sim_taxi.values()) if p["name"] == move_name), None)
+            if matched:
+                if move_action == "CUT":
+                    sim_active.pop(matched["id"], None)
+                    sim_taxi.pop(matched["id"], None)
+                elif move_action == "TAXI":
+                    sim_taxi[matched["id"]] = matched
+                    sim_active.pop(matched["id"], None)
+                elif move_action == "PROMOTE_TO_BENCH":
+                    sim_active[matched["id"]] = matched
+                    sim_taxi.pop(matched["id"], None)
 
     return recommendations, sim_active, sim_taxi

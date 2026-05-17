@@ -24,7 +24,13 @@ def init_session():
         st.session_state.last_refresh = None
     if "roster_to_team" not in st.session_state:
         st.session_state.roster_to_team = {}
-
+    if "roster_recommendations" not in st.session_state:
+        st.session_state.roster_recommendations = []
+    if "roster_sim_active" not in st.session_state:
+        st.session_state.roster_sim_active = {}
+    if "roster_sim_taxi" not in st.session_state:
+        st.session_state.roster_sim_taxi = {}
+            
 def build_roster_to_team(users, rosters):
     user_map = {u["user_id"]: u for u in users}
     roster_to_team = {}
@@ -66,17 +72,15 @@ def build_league_context(league_detail, draft_detail, my_roster, picks, my_roste
     }
 
 def render_roster(my_roster, players, league_detail, sim_active, sim_taxi):
+    from draft_advisor import calculate_starter_ids
+
     st.subheader("📊 Recommended Roster")
-    st.caption("🟢 Starter   ⬜ Bench   🚕 Taxi")
+    st.caption("🟢 Starter   ⬜ Bench   🚕 Taxi   🏥 IR (if healthy)")
 
     roster_positions = league_detail.get("roster_positions", [])
     active_ids = set(sim_active.keys())
     taxi_ids = set(sim_taxi.keys())
-
-    required = {"QB": 0, "RB": 0, "WR": 0, "TE": 0, "FLEX": 0, "SUPER_FLEX": 0}
-    for pos in roster_positions:
-        if pos in required:
-            required[pos] += 1
+    reserve_ids = set(my_roster.get("reserve") or [])
 
     enriched = []
     for pid in active_ids:
@@ -90,31 +94,13 @@ def render_roster(my_roster, players, league_detail, sim_active, sim_taxi):
             "age": player.get("fc_age") or player.get("age", "?"),
             "value": player.get("fc_value", 0) if isinstance(player.get("fc_value"), int) else 0,
             "years_exp": player.get("years_exp", 99),
-            "starter": False
+            "starter": False,
+            "on_ir": pid in reserve_ids
         })
 
     enriched.sort(key=lambda x: x["value"], reverse=True)
 
-    slots_filled = {"QB": 0, "RB": 0, "WR": 0, "TE": 0, "FLEX": 0, "SUPER_FLEX": 0}
-    starter_ids = set()
-
-    for player in enriched:
-        pos = player["position"]
-        if pos in slots_filled and slots_filled[pos] < required[pos]:
-            slots_filled[pos] += 1
-            starter_ids.add(player["id"])
-
-    flex_eligible = {"RB", "WR", "TE"}
-    for player in enriched:
-        if player["id"] not in starter_ids and slots_filled["FLEX"] < required["FLEX"] and player["position"] in flex_eligible:
-            slots_filled["FLEX"] += 1
-            starter_ids.add(player["id"])
-
-    for player in enriched:
-        if player["id"] not in starter_ids and slots_filled["SUPER_FLEX"] < required["SUPER_FLEX"]:
-            slots_filled["SUPER_FLEX"] += 1
-            starter_ids.add(player["id"])
-
+    starter_ids = calculate_starter_ids(set(p["id"] for p in enriched), players, league_detail)
     for player in enriched:
         player["starter"] = player["id"] in starter_ids
 
@@ -132,7 +118,8 @@ def render_roster(my_roster, players, league_detail, sim_active, sim_taxi):
             for p in pos_players:
                 age_str = f"Age {p['age']}" if p['age'] != "?" else "Age ?"
                 val_str = f"Val {p['value']}" if p['value'] else "unranked"
-                label = f"{p['name']}\n{age_str} | {val_str}"
+                ir_note = " 🏥 (if healthy)" if p.get("on_ir") else ""
+                label = f"{p['name']}{ir_note}\n{age_str} | {val_str}"
                 if p["starter"]:
                     st.success(label)
                 else:
@@ -183,16 +170,29 @@ def render_roster_recommendations(recommendations):
     for rec in recommendations:
         action = rec["action"]
         severity = rec["severity"]
-        label = f"**{rec['player']} ({rec['position']})** — {action}: {rec['note']}"
-
+        
+        label = f"**{rec['player']} ({rec['position']})** — {action}"
+        
         if severity == "success":
             st.success(label)
-        elif severity == "warning":
-            st.warning(label)
         elif severity == "error":
             st.error(label)
         else:
             st.info(label)
+        
+        st.caption(rec["reasoning"])
+        
+        for move in rec.get("cascading_moves", []):
+            move_action = move.get("action", "")
+            move_label = f"↳ **{move['player_name']}** — {move_action}: {move['reason']}"
+            if move_action == "CUT":
+                st.error(move_label)
+            elif move_action == "PROMOTE_TO_BENCH":
+                st.warning(move_label)
+            else:
+                st.info(move_label)
+        
+        st.divider()
 
 def render_setup():
     st.title("🏈 Draft Assistant")
@@ -294,14 +294,14 @@ def render_draft():
     league_context = build_league_context(league_detail, draft_detail, my_roster, picks, my_roster_id, players)
 
     my_draft_picks = [p["player_id"] for p in picks if p["roster_id"] == my_roster_id]
-    reserve_ids = set(my_roster.get("reserve") or [])
+
     taxi_ids = set(get_taxi_players(my_roster))
     all_ids = set(my_roster.get("players") or [])
     if my_draft_picks:
         all_ids.update(my_draft_picks)
-    active_ids = all_ids - taxi_ids - reserve_ids
+    active_ids = all_ids - taxi_ids
+
     starter_ids = calculate_starter_ids(active_ids, players, league_detail)
-    recommendations, sim_active, sim_taxi = get_roster_recommendations(my_roster, players, league_detail, my_draft_picks, starter_ids)
 
     if current_count > st.session_state.last_pick_count:
         st.session_state.last_pick_count = current_count
@@ -378,8 +378,49 @@ def render_draft():
                 st.rerun()
 
     st.divider()
-    render_roster(my_roster, players, league_detail, sim_active, sim_taxi)
-    render_roster_recommendations(recommendations)
+    if st.button("🔍 Analyze My Picks"):
+        st.session_state.roster_recommendations = []
+        st.session_state.roster_sim_active = {}
+        st.session_state.roster_sim_taxi = {}
+        with st.spinner("Claude is analyzing your roster moves..."):
+            recs, r_sim_active, r_sim_taxi = get_roster_recommendations(my_roster, players, league_detail, my_draft_picks, starter_ids)
+            st.session_state.roster_recommendations = recs
+            st.session_state.roster_sim_active = r_sim_active
+            st.session_state.roster_sim_taxi = r_sim_taxi
+
+    from sleeper_league import get_taxi_players as _get_taxi
+
+    def enrich_pid(pid):
+        p = players.get(pid, {})
+        if not p:
+            return None
+        return {
+            "id": pid,
+            "name": p.get("full_name", "Unknown"),
+            "position": p.get("position", "?"),
+            "age": p.get("fc_age") or p.get("age", "?"),
+            "value": p.get("fc_value", 0) if isinstance(p.get("fc_value"), int) else 0,
+            "years_exp": p.get("years_exp", 99),
+            "on_ir": pid in set(my_roster.get("reserve") or [])
+        }
+
+    raw_taxi_ids = set(_get_taxi(my_roster))
+    raw_active_ids = active_ids
+    raw_sim_active = {pid: enrich_pid(pid) for pid in raw_active_ids if enrich_pid(pid)}
+    raw_sim_taxi = {pid: enrich_pid(pid) for pid in raw_taxi_ids if enrich_pid(pid)}
+
+    if st.session_state.roster_sim_active:
+        display_active = st.session_state.roster_sim_active
+        display_taxi = st.session_state.roster_sim_taxi
+    else:
+        display_active = raw_sim_active
+        display_taxi = raw_sim_taxi
+
+    roster_placeholder = st.empty()
+    roster_placeholder.empty()
+    with roster_placeholder.container():
+        render_roster(my_roster, players, league_detail, display_active, display_taxi)
+        render_roster_recommendations(st.session_state.roster_recommendations)
 
     st.sidebar.title("⚙️ Settings")
     st.sidebar.write(f"**League:** {st.session_state.selected_league['name']}")
@@ -389,8 +430,15 @@ def render_draft():
     refresh_interval = st.sidebar.slider("Refresh interval (seconds)", 10, 60, 15)
 
     if auto_refresh:
-        time.sleep(refresh_interval)
-        st.rerun()
+        if "last_rerun" not in st.session_state:
+            st.session_state.last_rerun = datetime.now()
+        elapsed = (datetime.now() - st.session_state.last_rerun).seconds
+        if elapsed >= refresh_interval:
+            st.session_state.last_rerun = datetime.now()
+            st.rerun()
+        else:
+            time.sleep(1)
+            st.rerun()
 
 init_session()
 
