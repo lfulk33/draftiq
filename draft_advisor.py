@@ -64,8 +64,9 @@ IMPORTANT ROSTER CONSTRUCTION NOTES:
 - You have {picks_remaining} picks remaining in this draft including this one.
 - {"Taxi space is available so developmental stashes are viable." if taxi_open > 0 else "Taxi is full. Only draft players ready to contribute soon."}
 
-Based on the available players, my roster construction, and dynasty value principles, 
-recommend who I should draft with this pick.
+Based on the available players, my roster construction, and dynasty value principles,
+recommend who I should draft with this pick. For alternatives, provide at least 1 player
+from each position (QB, RB, WR, TE) and no more than 2 from any single position.
 
 Respond with this exact JSON structure:
 {{
@@ -75,8 +76,8 @@ Respond with this exact JSON structure:
     "positional_note": "Brief note on positional scarcity or roster fit",
     "upside": "Brief note on dynasty ceiling",
     "alternatives": [
-        {{"name": "Player Name", "reason": "One sentence why they are the alternative"}},
-        {{"name": "Player Name", "reason": "One sentence why they are the alternative"}}
+        {{"name": "Player Name", "position": "POS", "reason": "One sentence why they are the alternative"}}
+        // Minimum 1 per position across QB, RB, WR, TE. Maximum 2 from any single position.
     ]
 }}"""
 
@@ -86,10 +87,40 @@ def get_recommendation(picks, available, my_roster, league_context, pick_number)
     prompt = build_prompt(picks, available, my_roster, league_context, pick_number)
     response = get_completion(prompt, system=SYSTEM_PROMPT)
     try:
-        return json.loads(response)
+        rec = json.loads(response)
     except json.JSONDecodeError:
         clean = response.strip().removeprefix("```json").removesuffix("```").strip()
-        return json.loads(clean)
+        rec = json.loads(clean)
+    
+    tier, gap = calculate_confidence(rec.get("recommendation"), available, rec.get("alternatives", []))
+    rec["confidence_tier"] = tier
+    rec["confidence_gap"] = gap
+    
+    return rec
+
+def calculate_confidence(recommendation_name, available, alternatives):
+    ranked = sorted(
+        [p for p in available.values() if "fc_value" in p],
+        key=lambda x: x["fc_value"],
+        reverse=True
+    )
+    
+    if len(ranked) < 2:
+        return "high", None
+    
+    top = ranked[0]
+    second = ranked[1]
+    
+    gap = top.get("fc_value", 0) - second.get("fc_value", 0)
+    
+    if gap >= 300:
+        tier = "high"
+    elif gap >= 100:
+        tier = "medium"
+    else:
+        tier = "low"
+    
+    return tier, gap
 
 if __name__ == "__main__":
     from session import start_session

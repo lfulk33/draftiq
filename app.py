@@ -66,6 +66,38 @@ def build_league_context(league_detail, draft_detail, my_roster, picks, my_roste
         "my_existing_roster": my_existing_players
     }
 
+def render_roster(my_roster, players):
+    st.subheader("📊 Your Current Roster")
+    
+    positions = {"QB": [], "RB": [], "WR": [], "TE": [], "Other": []}
+    
+    for pid in my_roster.get("players") or []:
+        player = players.get(pid, {})
+        if not player:
+            continue
+        pos = player.get("position", "Other")
+        if pos not in positions:
+            pos = "Other"
+        positions[pos].append({
+            "name": player.get("full_name", "Unknown"),
+            "age": player.get("fc_age") or player.get("age", "?"),
+            "value": player.get("fc_value", "unranked")
+        })
+
+    cols = st.columns(4)
+    for i, pos in enumerate(["QB", "RB", "WR", "TE"]):
+        with cols[i]:
+            st.write(f"**{pos}**")
+            players_at_pos = sorted(
+                positions[pos],
+                key=lambda x: x["value"] if isinstance(x["value"], int) else 0,
+                reverse=True
+            )
+            for p in players_at_pos:
+                age_str = f"Age {p['age']}" if p['age'] != "?" else "Age ?"
+                value_str = f"Val {p['value']}" if p['value'] != "unranked" else "unranked"
+                st.caption(f"{p['name']} — {age_str} — {value_str}")
+
 def render_setup():
     st.title("🏈 Draft Assistant")
     st.subheader("Connect to your draft")
@@ -102,7 +134,10 @@ def render_setup():
                     st.error(f"Error fetching drafts: {e}")
 
     if "drafts" in st.session_state:
-        draft_labels = [f"{d['type']} - {d['status']}" for d in st.session_state.drafts]
+        draft_labels = [
+            f"{d.get('season', 'Unknown')} {d.get('metadata', {}).get('name', d['type'].title() + ' Draft')} (Rounds {d['settings'].get('rounds', '?')}) - {d['status'].replace('_', ' ').title()}"
+            for d in st.session_state.drafts
+        ]
         selected_draft = st.selectbox("Select draft", draft_labels)
         draft_index = draft_labels.index(selected_draft)
         draft = st.session_state.drafts[draft_index]
@@ -201,14 +236,27 @@ def render_draft():
         st.subheader("🤖 Claude's Recommendation")
         if st.session_state.recommendation:
             rec = st.session_state.recommendation
-            st.success(f"### {rec['recommendation']} ({rec['position']})")
+            
+            confidence = rec.get("confidence_tier", "unknown")
+            gap = rec.get("confidence_gap")
+            
+            if confidence == "high":
+                st.success(f"### {rec['recommendation']} ({rec['position']})")
+                st.success(f"🟢 High confidence — value gap of {gap} points over next best")
+            elif confidence == "medium":
+                st.warning(f"### {rec['recommendation']} ({rec['position']})")
+                st.warning(f"🟡 Medium confidence — value gap of {gap} points over next best")
+            else:
+                st.error(f"### {rec['recommendation']} ({rec['position']})")
+                st.error(f"🔴 Low confidence — coin flip territory, gap of {gap} points")
+
             st.write(f"**Reasoning:** {rec['reasoning']}")
             st.write(f"**Positional note:** {rec['positional_note']}")
             st.write(f"**Upside:** {rec['upside']}")
             st.divider()
             st.write("**Alternatives:**")
             for alt in rec.get("alternatives", []):
-                st.write(f"- **{alt['name']}**: {alt['reason']}")
+                st.write(f"- **{alt['name']}** ({alt.get('position', '?')}): {alt['reason']}")
         else:
             st.info("Waiting for next pick...")
 
@@ -217,6 +265,9 @@ def render_draft():
                 rec = get_recommendation(picks, available, my_roster, league_context, current_count + 1)
                 st.session_state.recommendation = rec
                 st.rerun()
+
+    st.divider()
+    render_roster(my_roster, players)
 
     st.sidebar.title("⚙️ Settings")
     st.sidebar.write(f"**League:** {st.session_state.selected_league['name']}")
