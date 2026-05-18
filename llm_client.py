@@ -24,17 +24,23 @@ def get_completion(prompt, model_key=DEFAULT_MODEL, max_tokens=1000, system=None
 
 def _call_claude(prompt, max_tokens, system):
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-    messages = [{"role": "user", "content": prompt}]
     kwargs = {
         "model": SUPPORTED_MODELS["claude"],
         "max_tokens": max_tokens,
-        "messages": messages
+        "messages": [{"role": "user", "content": prompt}]
     }
     if system:
         kwargs["system"] = system
+    
     response = client.messages.create(**kwargs)
+    
+    input_tokens = response.usage.input_tokens
+    output_tokens = response.usage.output_tokens
+    cost = (input_tokens / 1_000_000 * 3) + (output_tokens / 1_000_000 * 15)
+    print(f"[Claude] input:{input_tokens} output:{output_tokens} cost:${cost:.4f}")
+    
     return response.content[0].text
-
+        
 def _call_openai(prompt, max_tokens, system):
     raise NotImplementedError("GPT-4 support coming soon")
 

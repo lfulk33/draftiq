@@ -45,6 +45,7 @@ def build_roster_to_team(users, rosters):
     return roster_to_team
 
 def build_league_context(league_detail, draft_detail, my_roster, picks, my_roster_id, players, my_draft_picks=None):
+    from draft_advisor import calculate_roster_needs
     my_picks_count = count_my_picks(picks, my_roster_id)
     total_rounds = draft_detail["settings"].get("rounds", 4)
 
@@ -78,7 +79,14 @@ def build_league_context(league_detail, draft_detail, my_roster, picks, my_roste
                 "dynasty_value": players.get(pid, {}).get("fc_value", "unranked")
             }
             for pid in (my_draft_picks or [])
-        ]
+        ],
+        "roster_needs": {
+            pos: max(0, total - sum(1 for p in my_existing_players + [
+                {"position": players.get(pid, {}).get("position")} 
+                for pid in (my_draft_picks or [])
+            ] if p.get("position") == pos))
+            for pos, total in calculate_roster_needs(league_detail)[2].items()
+        }
     }
 
 def render_roster(my_roster, players, league_detail, sim_active, sim_taxi):
@@ -373,12 +381,6 @@ def render_draft():
             render_roster_recommendations(st.session_state.roster_recommendations)
         return
 
-    if current_count > st.session_state.last_pick_count:
-        st.session_state.last_pick_count = current_count
-        with st.spinner("Getting recommendation..."):
-            rec = get_recommendation(picks, available, my_roster, league_context, current_count + 1)
-            st.session_state.recommendation = rec
-
     st.session_state.last_refresh = datetime.now().strftime("%I:%M:%S %p")
 
     total_picks = draft_detail["settings"].get("rounds", 4) * draft_detail["settings"].get("teams", 12)
@@ -441,7 +443,7 @@ def render_draft():
         else:
             st.info("Waiting for next pick...")
 
-        if st.button("🔄 Refresh recommendation"):
+        if st.button("🎯 Get Recommendation"):
             with st.spinner("Getting recommendation..."):
                 rec = get_recommendation(picks, available, my_roster, league_context, current_count + 1)
                 st.session_state.recommendation = rec

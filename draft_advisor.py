@@ -266,7 +266,7 @@ def build_prompt(picks, available, my_roster, league_context, pick_number):
     qb_slots = sum(1 for p in roster_positions if p in ["QB", "SUPER_FLEX"])
     taxi_open = league_context.get("taxi_slots_total", 0) - league_context.get("taxi_slots_used", 0)
     picks_remaining = league_context.get("picks_remaining_for_me", 0)
-
+    print(f"my_picks_this_draft: {league_context.get('my_picks_this_draft', [])}")
     prompt = f"""You are advising on pick {pick_number} in a dynasty rookie draft.
 
 LEAGUE CONTEXT:
@@ -291,6 +291,10 @@ IMPORTANT ROSTER CONSTRUCTION NOTES:
 - You have {taxi_open} open taxi squad slots. Developmental rookies can be stashed there for up to {league_context.get("taxi_years")} years.
 - You have {picks_remaining} picks remaining in this draft including this one.
 - {"Taxi space is available so developmental stashes are viable." if taxi_open > 0 else "Taxi is full. Only draft players ready to contribute soon."}
+CURRENT POSITIONAL NEEDS (starter slots still unfilled, 0 means position is covered):
+{json.dumps(league_context.get("roster_needs", {}), indent=2)}
+- ROSTER CONSTRUCTION RULE: Do not recommend drafting a player at a position where need is 0 and you already have at least 1 backup, if another position still has unfilled starter slots (need > 0).
+- Flex slots are covered by RB and WR. Do not count TE as a flex starter unless no RB or WR options exist.
 
 Based on the available players, my roster construction, and dynasty value principles,
 recommend who I should draft with this pick. For alternatives, provide at least 1 player
