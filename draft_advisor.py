@@ -257,7 +257,9 @@ ROSTER SITUATION:
 - Current active roster count: {roster_count}
 - Roster max (including IR): {roster_max}
 - Roster over limit by: {roster_over}
-- NOTE: If this player goes to TAXI, that counts as leaving the active roster. Only recommend a cut if the roster is STILL over limit after placing this player.
+- NOTE: Taxi is a SEPARATE squad from the active roster. Placing a player on taxi does NOT affect the active roster count. Never recommend cutting an active roster player just because a player is going to taxi.
+- The ONLY time a cut is needed for a TAXI move is when the taxi squad itself is FULL (0 open slots). In that case follow the taxi-full rules below.
+- If taxi has open slots, no cuts of any kind are needed regardless of active roster count.
 - NOTE: If this player goes to ACTIVE_BENCH and roster is over limit, recommend exactly ONE cut.
 - NOTE: If roster is at or under the limit after placing this player, no cuts are needed.
 - Open taxi slots: {open_taxi}

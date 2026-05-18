@@ -30,7 +30,9 @@ def init_session():
         st.session_state.roster_sim_active = {}
     if "roster_sim_taxi" not in st.session_state:
         st.session_state.roster_sim_taxi = {}
-            
+    if "last_draft_status" not in st.session_state:
+        st.session_state.last_draft_status = None
+
 def build_roster_to_team(users, rosters):
     user_map = {u["user_id"]: u for u in users}
     roster_to_team = {}
@@ -77,7 +79,6 @@ def render_roster(my_roster, players, league_detail, sim_active, sim_taxi):
     st.subheader("📊 Recommended Roster")
     st.caption("🟢 Starter   ⬜ Bench   🚕 Taxi   🏥 IR (if healthy)")
 
-    roster_positions = league_detail.get("roster_positions", [])
     active_ids = set(sim_active.keys())
     taxi_ids = set(sim_taxi.keys())
     reserve_ids = set(my_roster.get("reserve") or [])
@@ -170,18 +171,18 @@ def render_roster_recommendations(recommendations):
     for rec in recommendations:
         action = rec["action"]
         severity = rec["severity"]
-        
+
         label = f"**{rec['player']} ({rec['position']})** — {action}"
-        
+
         if severity == "success":
             st.success(label)
         elif severity == "error":
             st.error(label)
         else:
             st.info(label)
-        
+
         st.caption(rec["reasoning"])
-        
+
         for move in rec.get("cascading_moves", []):
             move_action = move.get("action", "")
             move_label = f"↳ **{move['player_name']}** — {move_action}: {move['reason']}"
@@ -191,7 +192,7 @@ def render_roster_recommendations(recommendations):
                 st.warning(move_label)
             else:
                 st.info(move_label)
-        
+
         st.divider()
 
 def render_setup():
@@ -303,6 +304,60 @@ def render_draft():
 
     starter_ids = calculate_starter_ids(active_ids, players, league_detail)
 
+    def enrich_pid(pid):
+        p = players.get(pid, {})
+        if not p:
+            return None
+        return {
+            "id": pid,
+            "name": p.get("full_name", "Unknown"),
+            "position": p.get("position", "?"),
+            "age": p.get("fc_age") or p.get("age", "?"),
+            "value": p.get("fc_value", 0) if isinstance(p.get("fc_value"), int) else 0,
+            "years_exp": p.get("years_exp", 99),
+            "on_ir": pid in set(my_roster.get("reserve") or [])
+        }
+
+    raw_taxi_ids = set(get_taxi_players(my_roster))
+    raw_sim_active = {pid: enrich_pid(pid) for pid in active_ids if enrich_pid(pid)}
+    raw_sim_taxi = {pid: enrich_pid(pid) for pid in raw_taxi_ids if enrich_pid(pid)}
+
+    display_active = st.session_state.roster_sim_active if st.session_state.roster_sim_active else raw_sim_active
+    display_taxi = st.session_state.roster_sim_taxi if st.session_state.roster_sim_taxi else raw_sim_taxi
+
+    if draft_detail.get("status") == "complete":
+        if st.session_state.get("last_draft_status") != "complete":
+            st.session_state.roster_recommendations = []
+            st.session_state.roster_sim_active = {}
+            st.session_state.roster_sim_taxi = {}
+            st.session_state.last_draft_status = "complete"
+        display_active = raw_sim_active
+        display_taxi = raw_sim_taxi
+
+        st.title("🏈 Draft Assistant")
+        st.success("✅ Draft Complete!")
+        st.write(f"**League:** {st.session_state.selected_league['name']}")
+        st.write(f"**Your picks this draft:** {len(my_draft_picks)}")
+        st.divider()
+        st.subheader("🎯 Your Draft Picks")
+        for pid in my_draft_picks:
+            player = players.get(pid, {})
+            name = player.get("full_name", "Unknown")
+            pos = player.get("position", "?")
+            age = player.get("fc_age") or player.get("age", "?")
+            value = player.get("fc_value", "unranked")
+            st.info(f"**{name}** ({pos}) — Age {age} | Val {value}")
+        st.divider()
+
+        st.info("🏈 Live draft analysis is complete. Post-draft roster analysis coming soon — this will help you optimize cuts, taxi moves, and waiver targets based on your final roster.")
+
+        roster_placeholder = st.empty()
+        roster_placeholder.empty()
+        with roster_placeholder.container():
+            render_roster(my_roster, players, league_detail, display_active, display_taxi)
+            render_roster_recommendations(st.session_state.roster_recommendations)
+        return
+
     if current_count > st.session_state.last_pick_count:
         st.session_state.last_pick_count = current_count
         with st.spinner("Getting recommendation..."):
@@ -378,7 +433,7 @@ def render_draft():
                 st.rerun()
 
     st.divider()
-    if st.button("🔍 Analyze My Picks"):
+    if st.button("🔍 Analyze My Picks", key="analyze_live"):
         st.session_state.roster_recommendations = []
         st.session_state.roster_sim_active = {}
         st.session_state.roster_sim_taxi = {}
@@ -387,34 +442,8 @@ def render_draft():
             st.session_state.roster_recommendations = recs
             st.session_state.roster_sim_active = r_sim_active
             st.session_state.roster_sim_taxi = r_sim_taxi
-
-    from sleeper_league import get_taxi_players as _get_taxi
-
-    def enrich_pid(pid):
-        p = players.get(pid, {})
-        if not p:
-            return None
-        return {
-            "id": pid,
-            "name": p.get("full_name", "Unknown"),
-            "position": p.get("position", "?"),
-            "age": p.get("fc_age") or p.get("age", "?"),
-            "value": p.get("fc_value", 0) if isinstance(p.get("fc_value"), int) else 0,
-            "years_exp": p.get("years_exp", 99),
-            "on_ir": pid in set(my_roster.get("reserve") or [])
-        }
-
-    raw_taxi_ids = set(_get_taxi(my_roster))
-    raw_active_ids = active_ids
-    raw_sim_active = {pid: enrich_pid(pid) for pid in raw_active_ids if enrich_pid(pid)}
-    raw_sim_taxi = {pid: enrich_pid(pid) for pid in raw_taxi_ids if enrich_pid(pid)}
-
-    if st.session_state.roster_sim_active:
-        display_active = st.session_state.roster_sim_active
-        display_taxi = st.session_state.roster_sim_taxi
-    else:
-        display_active = raw_sim_active
-        display_taxi = raw_sim_taxi
+        display_active = st.session_state.roster_sim_active if st.session_state.roster_sim_active else raw_sim_active
+        display_taxi = st.session_state.roster_sim_taxi if st.session_state.roster_sim_taxi else raw_sim_taxi
 
     roster_placeholder = st.empty()
     roster_placeholder.empty()

@@ -5,6 +5,13 @@
 - Redraft mode would use weekly projections instead of fc_value for lineup decisions
 - Optimize roster refresh to only re-fetch when a new pick by the user is detected, rather than every poll cycle, to reduce Sleeper API calls
 
+## Roster Analysis
+- Pull FantasyCalc redraft values alongside dynasty values (isDynasty=false endpoint)
+- Store as fc_redraft_value on each player in fantasy_players.json
+- Pass both dynasty and redraft value to Claude roster move prompts
+- Claude should use redraft value as primary signal for taxi vs active bench decisions
+- Add dynasty/redraft toggle to roster panel display
+
 ## Draft Assistant
 - Manual pick entry mode for ESPN and Yahoo leagues (no API)
 - Multi-league profile support with saved configurations
