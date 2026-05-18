@@ -99,7 +99,10 @@ def render_roster(my_roster, players, league_detail, sim_active, sim_taxi):
             "on_ir": pid in reserve_ids
         })
 
-    enriched.sort(key=lambda x: x["value"], reverse=True)
+    enriched.sort(key=lambda x: (
+        players.get(x["id"], {}).get("fc_redraft_value") or 0,
+        x["value"]
+    ), reverse=True)
 
     starter_ids = calculate_starter_ids(set(p["id"] for p in enriched), players, league_detail)
     for player in enriched:
@@ -118,7 +121,10 @@ def render_roster(my_roster, players, league_detail, sim_active, sim_taxi):
             pos_players = [p for p in enriched if p["position"] == pos]
             for p in pos_players:
                 age_str = f"Age {p['age']}" if p['age'] != "?" else "Age ?"
-                val_str = f"Val {p['value']}" if p['value'] else "unranked"
+                dynasty_str = f"D:{p['value']}" if p['value'] else "D:unranked"
+                redraft_val = players.get(p['id'], {}).get('fc_redraft_value', 0) or 0
+                redraft_str = f"R:{redraft_val}" if redraft_val else "R:unranked"
+                val_str = f"{dynasty_str} | {redraft_str}"
                 ir_note = " 🏥 (if healthy)" if p.get("on_ir") else ""
                 label = f"{p['name']}{ir_note}\n{age_str} | {val_str}"
                 if p["starter"]:
@@ -295,7 +301,7 @@ def render_draft():
     league_context = build_league_context(league_detail, draft_detail, my_roster, picks, my_roster_id, players)
 
     my_draft_picks = [p["player_id"] for p in picks if p["roster_id"] == my_roster_id]
-
+    #my_draft_picks.append("13346")  # TEST: Carnell Tate WR redraft 1590
     taxi_ids = set(get_taxi_players(my_roster))
     all_ids = set(my_roster.get("players") or [])
     if my_draft_picks:
@@ -325,7 +331,8 @@ def render_draft():
     display_active = st.session_state.roster_sim_active if st.session_state.roster_sim_active else raw_sim_active
     display_taxi = st.session_state.roster_sim_taxi if st.session_state.roster_sim_taxi else raw_sim_taxi
 
-    if draft_detail.get("status") == "complete":
+    from config import DEV_MODE
+    if draft_detail.get("status") == "complete" and not DEV_MODE:
         if st.session_state.get("last_draft_status") != "complete":
             st.session_state.roster_recommendations = []
             st.session_state.roster_sim_active = {}
