@@ -445,7 +445,6 @@ def render_draft():
             else:
                 st.error(f"### {rec['recommendation']} ({rec['position']}){rec_val_str}")
                 st.error(f"🔴 Low confidence — coin flip territory, gap of {gap} points")
-                st.error(f"🔴 Low confidence — coin flip territory, gap of {gap} points")
 
             st.write(f"**Reasoning:** {rec['reasoning']}")
             st.write(f"**Positional note:** {rec['positional_note']}")
