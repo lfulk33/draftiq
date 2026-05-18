@@ -142,7 +142,9 @@ def render_roster(my_roster, players, league_detail, sim_active, sim_taxi):
                 redraft_str = f"R:{redraft_val}" if redraft_val else "R:unranked"
                 val_str = f"{dynasty_str} | {redraft_str}"
                 ir_note = " 🏥 (if healthy)" if p.get("on_ir") else ""
-                label = f"{p['name']}{ir_note}\n{age_str} | {val_str}"
+                team = players.get(p['id'], {}).get('team', '')
+                team_str = f" ({team})" if team else ""
+                label = f"{p['name']}{team_str}{ir_note}\n{age_str} | {val_str}"
                 if p["starter"]:
                     st.success(label)
                 else:
@@ -175,7 +177,9 @@ def render_roster(my_roster, players, league_detail, sim_active, sim_taxi):
         taxi_cols = st.columns(max(len(taxi_players), 1))
         for i, p in enumerate(taxi_players):
             with taxi_cols[i]:
-                label = f"{p['name']} ({p['position']})\nAge {p['age']} | Val {p['value']}"
+                team = players.get(pid, {}).get('team', '')
+                team_str = f" ({team})" if team else ""
+                label = f"{p['name']}{team_str} ({p['position']})\nAge {p['age']} | Val {p['value']}"
                 if p["note"]:
                     if "promoting" in p["note"]:
                         st.warning(f"{label}\n{p['note']}")
@@ -409,7 +413,11 @@ def render_draft():
             roster_id = pick["roster_id"]
             is_mine = roster_id == my_roster_id
             team_name = roster_to_team.get(roster_id, f"Roster {roster_id}")
-            label = f"Pick {pick['pick_no']} — {name} ({pos}) — {team_name}"
+            dynasty = player.get('fc_value', '')
+            redraft = player.get('fc_redraft_value', '')
+            val_str = f" D:{dynasty}" if dynasty else ""
+            val_str += f" R:{redraft}" if redraft else ""
+            label = f"Pick {pick['pick_no']} — {name} ({pos}){val_str} — {team_name}"
             if is_mine:
                 st.success(f"⭐ {label}")
             else:
@@ -423,14 +431,20 @@ def render_draft():
             confidence = rec.get("confidence_tier", "unknown")
             gap = rec.get("confidence_gap")
 
+            rec_player = next((p for p in available.values() if p.get("full_name") == rec["recommendation"]), {})
+            rec_dynasty = rec_player.get("fc_value", "")
+            rec_redraft = rec_player.get("fc_redraft_value", "")
+            rec_val_str = f" | D:{rec_dynasty} R:{rec_redraft}" if rec_dynasty or rec_redraft else ""
+
             if confidence == "high":
-                st.success(f"### {rec['recommendation']} ({rec['position']})")
+                st.success(f"### {rec['recommendation']} ({rec['position']}){rec_val_str}")
                 st.success(f"🟢 High confidence — value gap of {gap} points over next best")
             elif confidence == "medium":
-                st.warning(f"### {rec['recommendation']} ({rec['position']})")
+                st.warning(f"### {rec['recommendation']} ({rec['position']}){rec_val_str}")
                 st.warning(f"🟡 Medium confidence — value gap of {gap} points over next best")
             else:
-                st.error(f"### {rec['recommendation']} ({rec['position']})")
+                st.error(f"### {rec['recommendation']} ({rec['position']}){rec_val_str}")
+                st.error(f"🔴 Low confidence — coin flip territory, gap of {gap} points")
                 st.error(f"🔴 Low confidence — coin flip territory, gap of {gap} points")
 
             st.write(f"**Reasoning:** {rec['reasoning']}")
@@ -439,7 +453,12 @@ def render_draft():
             st.divider()
             st.write("**Alternatives:**")
             for alt in rec.get("alternatives", []):
-                st.write(f"- **{alt['name']}** ({alt.get('position', '?')}): {alt['reason']}")
+                alt_player = next((p for p in available.values() if p.get("full_name") == alt["name"]), {})
+                dynasty = alt_player.get("fc_value", "")
+                redraft = alt_player.get("fc_redraft_value", "")
+                val_str = f" D:{dynasty}" if dynasty else ""
+                val_str += f" R:{redraft}" if redraft else ""
+                st.write(f"- **{alt['name']}** ({alt.get('position', '?')}){val_str}: {alt['reason']}")
         else:
             st.info("Waiting for next pick...")
 
