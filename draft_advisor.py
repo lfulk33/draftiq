@@ -3,9 +3,9 @@ import math
 from llm_client import get_completion
 
 SYSTEM_PROMPT = """You are an expert dynasty fantasy football draft assistant. 
-You specialize in dynasty leagues with superflex/2QB formats.
 You reason about long-term player value, age curves, and positional scarcity.
 You give concise, confident recommendations with clear reasoning.
+Always base your recommendations on the actual league settings provided, including roster construction and scoring format.
 Always respond in valid JSON only. No preamble, no markdown, no explanation outside the JSON."""
 
 def get_flex_eligible(slot_name):
@@ -274,6 +274,9 @@ LEAGUE CONTEXT:
 
 MY CURRENT ROSTER:
 {json.dumps(my_players, indent=2)}
+
+MY PICKS SO FAR THIS DRAFT:
+{json.dumps(league_context.get("my_picks_this_draft", []), indent=2)}
 
 TOP 20 AVAILABLE PLAYERS BY DYNASTY VALUE:
 {json.dumps(available_summary, indent=2)}

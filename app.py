@@ -44,7 +44,7 @@ def build_roster_to_team(users, rosters):
         roster_to_team[roster["roster_id"]] = team_name
     return roster_to_team
 
-def build_league_context(league_detail, draft_detail, my_roster, picks, my_roster_id, players):
+def build_league_context(league_detail, draft_detail, my_roster, picks, my_roster_id, players, my_draft_picks=None):
     my_picks_count = count_my_picks(picks, my_roster_id)
     total_rounds = draft_detail["settings"].get("rounds", 4)
 
@@ -70,7 +70,15 @@ def build_league_context(league_detail, draft_detail, my_roster, picks, my_roste
         "taxi_years": league_detail["settings"].get("taxi_years"),
         "picks_made_by_me": my_picks_count,
         "picks_remaining_for_me": total_rounds - my_picks_count,
-        "my_existing_roster": my_existing_players
+        "my_existing_roster": my_existing_players,
+        "my_picks_this_draft": [
+            {
+                "name": players.get(pid, {}).get("full_name", "Unknown"),
+                "position": players.get(pid, {}).get("position", "?"),
+                "dynasty_value": players.get(pid, {}).get("fc_value", "unranked")
+            }
+            for pid in (my_draft_picks or [])
+        ]
     }
 
 def render_roster(my_roster, players, league_detail, sim_active, sim_taxi):
@@ -298,9 +306,9 @@ def render_draft():
     current_count = len(picks)
     rookie_draft = is_rookie_draft(draft_detail)
     available = get_available_rookies(players, picks) if rookie_draft else get_available_players(players, picks)
-    league_context = build_league_context(league_detail, draft_detail, my_roster, picks, my_roster_id, players)
 
     my_draft_picks = [p["player_id"] for p in picks if p["roster_id"] == my_roster_id]
+    league_context = build_league_context(league_detail, draft_detail, my_roster, picks, my_roster_id, players, my_draft_picks)
     #my_draft_picks.append("13346")  # TEST: Carnell Tate WR redraft 1590
     taxi_ids = set(get_taxi_players(my_roster))
     all_ids = set(my_roster.get("players") or [])
