@@ -317,7 +317,7 @@ def render_draft():
 
     my_draft_picks = [p["player_id"] for p in picks if p["roster_id"] == my_roster_id]
     league_context = build_league_context(league_detail, draft_detail, my_roster, picks, my_roster_id, players, my_draft_picks)
-    #my_draft_picks.append("13346")  # TEST: Carnell Tate WR redraft 1590
+
     taxi_ids = set(get_taxi_players(my_roster))
     all_ids = set(my_roster.get("players") or [])
     if my_draft_picks:

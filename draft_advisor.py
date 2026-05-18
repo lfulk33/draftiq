@@ -266,7 +266,6 @@ def build_prompt(picks, available, my_roster, league_context, pick_number):
     qb_slots = sum(1 for p in roster_positions if p in ["QB", "SUPER_FLEX"])
     taxi_open = league_context.get("taxi_slots_total", 0) - league_context.get("taxi_slots_used", 0)
     picks_remaining = league_context.get("picks_remaining_for_me", 0)
-    print(f"my_picks_this_draft: {league_context.get('my_picks_this_draft', [])}")
     prompt = f"""You are advising on pick {pick_number} in a dynasty rookie draft.
 
 LEAGUE CONTEXT:
