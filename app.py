@@ -32,6 +32,10 @@ def init_session():
         st.session_state.roster_sim_taxi = {}
     if "last_draft_status" not in st.session_state:
         st.session_state.last_draft_status = None
+    if "claude_calls" not in st.session_state:
+        st.session_state.claude_calls = 0
+    if "analyze_calls" not in st.session_state:
+        st.session_state.analyze_calls = 0
 
 def build_roster_to_team(users, rosters):
     user_map = {u["user_id"]: u for u in users}
@@ -461,24 +465,36 @@ def render_draft():
         else:
             st.info("Waiting for next pick...")
 
-        if st.button("🎯 Get Recommendation"):
-            with st.spinner("Getting recommendation..."):
-                rec = get_recommendation(picks, available, my_roster, league_context, current_count + 1)
-                st.session_state.recommendation = rec
-                st.rerun()
+        MAX_RECOMMENDATIONS = 20
+        calls_left = MAX_RECOMMENDATIONS - st.session_state.claude_calls
+        if calls_left > 0:
+            if st.button(f"🎯 Get Recommendation ({calls_left} remaining)"):
+                with st.spinner("Getting recommendation..."):
+                    rec = get_recommendation(picks, available, my_roster, league_context, current_count + 1)
+                    st.session_state.recommendation = rec
+                    st.session_state.claude_calls += 1
+                    st.rerun()
+        else:
+            st.warning("Recommendation limit reached for this session.")
 
     st.divider()
-    if st.button("🔍 Analyze My Picks", key="analyze_live"):
-        st.session_state.roster_recommendations = []
-        st.session_state.roster_sim_active = {}
-        st.session_state.roster_sim_taxi = {}
-        with st.spinner("Claude is analyzing your roster moves..."):
-            recs, r_sim_active, r_sim_taxi = get_roster_recommendations(my_roster, players, league_detail, my_draft_picks, starter_ids)
-            st.session_state.roster_recommendations = recs
-            st.session_state.roster_sim_active = r_sim_active
-            st.session_state.roster_sim_taxi = r_sim_taxi
-        display_active = st.session_state.roster_sim_active if st.session_state.roster_sim_active else raw_sim_active
-        display_taxi = st.session_state.roster_sim_taxi if st.session_state.roster_sim_taxi else raw_sim_taxi
+    MAX_ANALYSES = 3
+    analyses_left = MAX_ANALYSES - st.session_state.get("analyze_calls", 0)
+    if analyses_left > 0:
+        if st.button(f"🔍 Analyze My Picks ({analyses_left} remaining)", key="analyze_live"):
+            st.session_state.roster_recommendations = []
+            st.session_state.roster_sim_active = {}
+            st.session_state.roster_sim_taxi = {}
+            with st.spinner("Claude is analyzing your roster moves..."):
+                recs, r_sim_active, r_sim_taxi = get_roster_recommendations(my_roster, players, league_detail, my_draft_picks, starter_ids)
+                st.session_state.roster_recommendations = recs
+                st.session_state.roster_sim_active = r_sim_active
+                st.session_state.roster_sim_taxi = r_sim_taxi
+            st.session_state.analyze_calls = st.session_state.get("analyze_calls", 0) + 1
+            display_active = st.session_state.roster_sim_active if st.session_state.roster_sim_active else raw_sim_active
+            display_taxi = st.session_state.roster_sim_taxi if st.session_state.roster_sim_taxi else raw_sim_taxi
+    else:
+        st.warning("Analysis limit reached for this session.")
 
     roster_placeholder = st.empty()
     roster_placeholder.empty()
