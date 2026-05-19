@@ -241,8 +241,9 @@ Write ONLY the reasoning as a plain string (2-3 sentences). No JSON, no preamble
 
 def build_prompt(picks, available, my_roster, league_context, pick_number):
     top_available = sorted(
-        [p for p in available.values() if "fc_overall_rank" in p],
-        key=lambda x: x["fc_overall_rank"]
+        [p for p in available.values() if "fc_value" in p],
+        key=lambda x: x["fc_value"],
+        reverse=True
     )[:20]
 
     available_summary = []
@@ -266,10 +267,16 @@ def build_prompt(picks, available, my_roster, league_context, pick_number):
     qb_slots = sum(1 for p in roster_positions if p in ["QB", "SUPER_FLEX"])
     taxi_open = league_context.get("taxi_slots_total", 0) - league_context.get("taxi_slots_used", 0)
     picks_remaining = league_context.get("picks_remaining_for_me", 0)
+    bpa_player, _, bpa_gap = calculate_bpa(available, league_context)
+    vorp_players, replacement = calculate_vorp(available, league_context)
     prompt = f"""You are advising on pick {pick_number} in a dynasty rookie draft.
 
 LEAGUE CONTEXT:
 {json.dumps(league_context, indent=2)}
+
+LEAGUE FORMAT: {"Dynasty" if league_context.get("is_dynasty") else "Redraft"}
+
+{"Dynasty notes: Prioritize age, long-term value, and development potential. Taxi squad eligibility matters." if league_context.get("is_dynasty") else "Redraft notes: Prioritize immediate production and current season value. Ignore long-term dynasty upside."}
 
 MY CURRENT ROSTER:
 {json.dumps(my_players, indent=2)}
@@ -279,6 +286,9 @@ MY PICKS SO FAR THIS DRAFT:
 
 TOP 20 AVAILABLE PLAYERS BY DYNASTY VALUE:
 {json.dumps(available_summary, indent=2)}
+
+TOP 10 AVAILABLE PLAYERS BY VORP (Value Over Replacement):
+{json.dumps([{"name": v["player"].get("full_name"), "position": v["position"], "vorp": round(v["vorp"]), "dynasty_value": v["value"]} for v in sorted(vorp_players, key=lambda x: x["vorp"], reverse=True)[:10]], indent=2)}
 
 TOTAL PICKS MADE SO FAR: {len(picks)}
 
@@ -290,22 +300,24 @@ IMPORTANT ROSTER CONSTRUCTION NOTES:
 - You have {taxi_open} open taxi squad slots. Developmental rookies can be stashed there for up to {league_context.get("taxi_years")} years.
 - You have {picks_remaining} picks remaining in this draft including this one.
 - {"Taxi space is available so developmental stashes are viable." if taxi_open > 0 else "Taxi is full. Only draft players ready to contribute soon."}
-STARTER SLOTS STILL UNFILLED:
-{json.dumps(league_context.get("starter_needs", {}), indent=2)}
+ROSTER CONSTRUCTION DETAIL:
+{json.dumps({
+    pos: f"{d['dedicated_slots']} dedicated {pos} slot(s) + {d['flex_eligible']} flex slot(s) eligible for {pos}"
+    for pos, d in league_context.get("roster_construction_detail", {}).items()
+}, indent=2)}
 
-BACKUP SLOTS NEEDED PER POSITION:
-{json.dumps(league_context.get("backup_needs", {}), indent=2)}
+PLAYERS ALREADY DRAFTED BY POSITION THIS DRAFT:
+{json.dumps({pos: sum(1 for p in league_context.get("my_picks_this_draft", []) + league_context.get("my_existing_roster", []) if p.get("position") == pos) for pos in ["QB", "RB", "WR", "TE"]}, indent=2)}
 
-- ROSTER CONSTRUCTION RULE: Prioritize filling positions where starter_needs > 0 before adding backups at covered positions.
-- BEST PLAYER AVAILABLE EXCEPTION: If the top available player has a dynasty value significantly higher (500+ points) than the best player available at your most needed position, consider taking the best player regardless of positional need. Elite value trumps positional scarcity in dynasty.
-- If a position is covered but the available player would immediately upgrade a starter slot (their value exceeds your weakest starter at that position), they are worth considering over a positional need pick.
-- FLEX slots can be filled by RB, WR, or TE. SUPER_FLEX can be filled by QB, RB, WR, or TE. WRRB_FLEX by RB or WR. REC_FLEX by WR or TE. The starter_needs above reflect fractional slot allocation across eligible positions. Use your judgment about which position best fills each flex slot based on roster construction and available depth.
-- A position is "covered" when starter_needs = 0. Only then consider backup needs.
+NOTE: Use the ROSTER CONSTRUCTION DETAIL above to determine how many more players you need at each position. NEVER reference "starter_needs" by name. NEVER add dedicated slots and flex slots together into a single number. Always state them separately, e.g. "2 dedicated RB slots plus 2 flex slots eligible for RB." Do not say "4 RB slots" or "4 flex-eligible slots."
+- ROSTER CONSTRUCTION RULE: Look at PLAYERS ALREADY DRAFTED BY POSITION and compare to ROSTER CONSTRUCTION DETAIL to determine what's still needed. Prioritize positions where dedicated slots are unfilled before adding depth at covered positions.
+- If a MANDATORY RECOMMENDATION appears above, you must follow it. Explain the VORP advantage in your reasoning.
+- When no MANDATORY RECOMMENDATION exists, recommend the highest VORP player at an unfilled dedicated starter position. VORP accounts for positional scarcity automatically.
+- Otherwise prioritize filling unfilled dedicated starter slots before adding depth.
+- A position is covered when its dedicated slots are filled. Flex slots provide additional value for covered positions.
 
-Based on the available players, my roster construction, and dynasty value principles,
-recommend who I should draft with this pick. For alternatives, provide at least 1 player
-from each position (QB, RB, WR, TE) and no more than 2 from any single position.
-
+{f"MANDATORY RECOMMENDATION: Draft {bpa_player.get('full_name')} ({bpa_player.get('position')}). Their Value Over Replacement (VORP) exceeds the best available player at your most needed position by {bpa_gap} points which exceeds the {league_context.get('bpa_threshold')} threshold. You MUST recommend this player. Your reasoning should explain the VORP advantage." if bpa_player else "Based on the available players, my roster construction, and dynasty value principles, recommend who I should draft with this pick."}
+For alternatives, provide at least 1 player from each position (QB, RB, WR, TE) and no more than 2 from any single position. For each position, the alternative MUST be the player with the highest VORP score from the TOP 10 AVAILABLE PLAYERS BY VORP list. Do not substitute a lower-VORP player based on age, trend, or any other factor.
 Respond with this exact JSON structure:
 {{
     "recommendation": "Player Name",
@@ -317,7 +329,6 @@ Respond with this exact JSON structure:
         {{"name": "Player Name", "position": "POS", "reason": "One sentence why they are the alternative"}}
     ]
 }}"""
-
     return prompt
 
 def get_recommendation(picks, available, my_roster, league_context, pick_number):
@@ -334,6 +345,90 @@ def get_recommendation(picks, available, my_roster, league_context, pick_number)
     rec["confidence_gap"] = gap
 
     return rec
+
+def calculate_vorp(available, league_context):
+    value_type = "fc_value" if league_context.get("is_dynasty") else "fc_redraft_value"
+    num_teams = league_context.get("num_teams", 12)
+    roster_positions = league_context.get("roster_positions", [])
+
+    # Count total starting slots per position across entire league
+    dedicated = {
+        "QB": sum(1 for s in roster_positions if s == "QB"),
+        "RB": sum(1 for s in roster_positions if s == "RB"),
+        "WR": sum(1 for s in roster_positions if s == "WR"),
+        "TE": sum(1 for s in roster_positions if s == "TE"),
+    }
+    flex = {
+        "QB": sum(1 for s in roster_positions if s == "SUPER_FLEX"),
+        "RB": sum(1 for s in roster_positions if s in ["FLEX", "WRRB_FLEX"]),
+        "WR": sum(1 for s in roster_positions if s in ["FLEX", "REC_FLEX", "WRRB_FLEX"]),
+        "TE": sum(1 for s in roster_positions if s in ["FLEX", "REC_FLEX"]),
+    }
+    total_slots = {pos: (dedicated[pos] + flex[pos]) * num_teams for pos in dedicated}
+
+    # Find replacement level player for each position
+    replacement = {}
+    for pos in ["QB", "RB", "WR", "TE"]:
+        pos_players = sorted(
+            [p for p in available.values() if p.get("position") == pos and p.get(value_type, 0)],
+            key=lambda x: x.get(value_type, 0),
+            reverse=True
+        )
+        replacement_index = total_slots.get(pos, 12)
+        if len(pos_players) > replacement_index:
+            replacement[pos] = pos_players[replacement_index].get(value_type, 0)
+        elif pos_players:
+            replacement[pos] = pos_players[-1].get(value_type, 0)
+        else:
+            replacement[pos] = 0
+
+    # Calculate VORP for each available player
+    vorp_players = []
+    for p in available.values():
+        pos = p.get("position", "?")
+        val = p.get(value_type, 0)
+        if pos in replacement and val:
+            vorp = val - replacement[pos]
+            vorp_players.append({
+                "player": p,
+                "vorp": vorp,
+                "value": val,
+                "position": pos
+            })
+
+    return vorp_players, replacement
+
+def calculate_bpa(available, league_context):
+    value_type = "fc_value" if league_context.get("is_dynasty") else "fc_redraft_value"
+    threshold = league_context.get("bpa_threshold", 1000)
+    starter_needs = league_context.get("starter_needs", {})
+
+    vorp_players, replacement = calculate_vorp(available, league_context)
+    if not vorp_players:
+        return None, None, None
+
+    # Find most needed position
+    needed_positions = [pos for pos, need in starter_needs.items() if need > 0]
+    if not needed_positions:
+        return None, None, None
+
+    # Best VORP player at most needed position
+    best_needed_vorp = max(
+        (v for v in vorp_players if v["position"] in needed_positions),
+        key=lambda x: x["vorp"],
+        default=None
+    )
+    if not best_needed_vorp:
+        return None, None, None
+
+    # Best VORP player overall
+    best_overall_vorp = max(vorp_players, key=lambda x: x["vorp"])
+
+    gap = best_overall_vorp["vorp"] - best_needed_vorp["vorp"]
+
+    if gap > threshold and best_overall_vorp["position"] not in needed_positions:
+        return best_overall_vorp["player"], best_needed_vorp["player"], gap
+    return None, best_needed_vorp["player"], gap
 
 def calculate_confidence(recommendation_name, available, alternatives):
     ranked = sorted(
@@ -357,6 +452,7 @@ def calculate_confidence(recommendation_name, available, alternatives):
         tier = "low"
 
     return tier, gap
+
 
 def get_roster_recommendations(my_roster, players, league_detail, my_draft_picks, starter_ids):
     from sleeper_league import get_taxi_players

@@ -6,3 +6,8 @@ SLEEPER_USERNAME = "LFULK33"
 SEASON = "2026"
 DRAFT_POLL_INTERVAL = 15  # seconds between pick checks
 DEV_MODE = os.getenv("DEV_MODE", "false").lower() == "true"
+# Best player available thresholds
+# If top available player's value exceeds best available at needed position by this amount,
+# recommend best player regardless of positional need
+BPA_THRESHOLD_DYNASTY = 400
+BPA_THRESHOLD_REDRAFT = 300

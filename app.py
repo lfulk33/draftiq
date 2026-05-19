@@ -7,6 +7,7 @@ from sleeper_draft import get_picks, get_available_rookies, get_available_player
 from sleeper_league import get_rosters, get_league, get_taxi_count, get_league_users
 from poller import is_rookie_draft
 from config import SLEEPER_USERNAME
+from config import BPA_THRESHOLD_DYNASTY, BPA_THRESHOLD_REDRAFT
 
 st.set_page_config(
     page_title="Draft Assistant",
@@ -49,7 +50,7 @@ def build_roster_to_team(users, rosters):
         roster_to_team[roster["roster_id"]] = team_name
     return roster_to_team
 
-def build_league_context(league_detail, draft_detail, my_roster, picks, my_roster_id, players, my_draft_picks=None):
+def build_league_context(league_detail, draft_detail, my_roster, picks, my_roster_id, players, my_draft_picks=None, is_dynasty=True):
     from draft_advisor import calculate_roster_needs
     my_picks_count = count_my_picks(picks, my_roster_id)
     total_rounds = draft_detail["settings"].get("rounds", 4)
@@ -86,16 +87,42 @@ def build_league_context(league_detail, draft_detail, my_roster, picks, my_roste
             for pid in (my_draft_picks or [])
         ],
         "starter_needs": {
-            pos: max(0, math.ceil(starters) - sum(1 for p in my_existing_players + [
-                {"position": players.get(pid, {}).get("position")}
+            pos: max(0, dedicated - sum(1 for p in my_existing_players + [
+                {"position": players.get(pid, {}).get("position")} 
                 for pid in (my_draft_picks or [])
             ] if p.get("position") == pos))
-            for pos, starters in calculate_roster_needs(league_detail)[0].items()
+            for pos, dedicated in {
+                "QB": sum(1 for s in league_detail.get("roster_positions", []) if s == "QB"),
+                "RB": sum(1 for s in league_detail.get("roster_positions", []) if s == "RB"),
+                "WR": sum(1 for s in league_detail.get("roster_positions", []) if s == "WR"),
+                "TE": sum(1 for s in league_detail.get("roster_positions", []) if s == "TE"),
+            }.items()
         },
         "backup_needs": {
             pos: backups
             for pos, backups in calculate_roster_needs(league_detail)[1].items()
-        }
+        },
+        "roster_construction_detail": {
+            "QB": {
+                "dedicated_slots": sum(1 for s in league_detail.get("roster_positions", []) if s == "QB"),
+                "flex_eligible": sum(1 for s in league_detail.get("roster_positions", []) if s == "SUPER_FLEX")
+            },
+            "RB": {
+                "dedicated_slots": sum(1 for s in league_detail.get("roster_positions", []) if s == "RB"),
+                "flex_eligible": sum(1 for s in league_detail.get("roster_positions", []) if s in ["FLEX", "WRRB_FLEX"])
+            },
+            "WR": {
+                "dedicated_slots": sum(1 for s in league_detail.get("roster_positions", []) if s == "WR"),
+                "flex_eligible": sum(1 for s in league_detail.get("roster_positions", []) if s in ["FLEX", "REC_FLEX", "WRRB_FLEX"])
+            },
+            "TE": {
+                "dedicated_slots": sum(1 for s in league_detail.get("roster_positions", []) if s == "TE"),
+                "flex_eligible": sum(1 for s in league_detail.get("roster_positions", []) if s in ["FLEX", "REC_FLEX"])
+            }
+        },
+        "is_dynasty": is_dynasty,
+        "bpa_threshold": BPA_THRESHOLD_DYNASTY if is_dynasty else BPA_THRESHOLD_REDRAFT,
+        "value_type": "dynasty_value" if is_dynasty else "redraft_value",
     }
 
 def render_roster(my_roster, players, league_detail, sim_active, sim_taxi, is_dynasty=True):
@@ -332,8 +359,9 @@ def render_draft():
     available = get_available_rookies(players, picks) if rookie_draft else get_available_players(players, picks)
 
     my_draft_picks = [p["player_id"] for p in picks if p["roster_id"] == my_roster_id]
-    league_context = build_league_context(league_detail, draft_detail, my_roster, picks, my_roster_id, players, my_draft_picks)
-
+    league_context = build_league_context(league_detail, draft_detail, my_roster, picks, my_roster_id, players, my_draft_picks, is_dynasty)
+#    print(f"starter_needs: {league_context.get('starter_needs')}")
+#    print(f"my_picks positions: {[p['position'] for p in league_context.get('my_picks_this_draft', [])]}")
     taxi_ids = set(get_taxi_players(my_roster))
     all_ids = set(my_roster.get("players") or [])
     if my_draft_picks:
