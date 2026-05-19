@@ -312,8 +312,8 @@ PLAYERS ALREADY DRAFTED BY POSITION THIS DRAFT:
 NOTE: Use the ROSTER CONSTRUCTION DETAIL above to determine how many more players you need at each position. NEVER reference "starter_needs" by name. NEVER add dedicated slots and flex slots together into a single number. Always state them separately, e.g. "2 dedicated RB slots plus 2 flex slots eligible for RB." Do not say "4 RB slots" or "4 flex-eligible slots."
 - ROSTER CONSTRUCTION RULE: Look at PLAYERS ALREADY DRAFTED BY POSITION and compare to ROSTER CONSTRUCTION DETAIL to determine what's still needed. Prioritize positions where dedicated slots are unfilled before adding depth at covered positions.
 - If a MANDATORY RECOMMENDATION appears above, you must follow it. Explain the VORP advantage in your reasoning.
-- When no MANDATORY RECOMMENDATION exists, recommend the highest VORP player at an unfilled dedicated starter position. VORP accounts for positional scarcity automatically.
-- Otherwise prioritize filling unfilled dedicated starter slots before adding depth.
+- When no MANDATORY RECOMMENDATION exists and dedicated starter slots are unfilled, recommend the highest VORP player at the most needed unfilled position.
+- When all dedicated starter slots are filled, recommend the highest VORP player overall from the TOP 10 AVAILABLE PLAYERS BY VORP list, regardless of position, unless that position already has starters filled AND at least {league_context.get("backup_needs", {}).get("QB", 1)} backups drafted.
 - A position is covered when its dedicated slots are filled. Flex slots provide additional value for covered positions.
 
 {f"MANDATORY RECOMMENDATION: Draft {bpa_player.get('full_name')} ({bpa_player.get('position')}). Their Value Over Replacement (VORP) exceeds the best available player at your most needed position by {bpa_gap} points which exceeds the {league_context.get('bpa_threshold')} threshold. You MUST recommend this player. Your reasoning should explain the VORP advantage." if bpa_player else "Based on the available players, my roster construction, and dynasty value principles, recommend who I should draft with this pick."}
