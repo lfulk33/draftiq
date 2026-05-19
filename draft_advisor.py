@@ -290,10 +290,15 @@ IMPORTANT ROSTER CONSTRUCTION NOTES:
 - You have {taxi_open} open taxi squad slots. Developmental rookies can be stashed there for up to {league_context.get("taxi_years")} years.
 - You have {picks_remaining} picks remaining in this draft including this one.
 - {"Taxi space is available so developmental stashes are viable." if taxi_open > 0 else "Taxi is full. Only draft players ready to contribute soon."}
-CURRENT POSITIONAL NEEDS (starter slots still unfilled, 0 means position is covered):
-{json.dumps(league_context.get("roster_needs", {}), indent=2)}
-- ROSTER CONSTRUCTION RULE: Do not recommend drafting a player at a position where need is 0 and you already have at least 1 backup, if another position still has unfilled starter slots (need > 0).
+STARTER SLOTS STILL UNFILLED:
+{json.dumps(league_context.get("starter_needs", {}), indent=2)}
+
+BACKUP SLOTS NEEDED PER POSITION:
+{json.dumps(league_context.get("backup_needs", {}), indent=2)}
+
+- ROSTER CONSTRUCTION RULE: Prioritize filling positions where starter_needs > 0 before adding backups at covered positions.
 - Flex slots are covered by RB and WR. Do not count TE as a flex starter unless no RB or WR options exist.
+- A position is "covered" when starter_needs = 0. Only then consider backup needs.
 
 Based on the available players, my roster construction, and dynasty value principles,
 recommend who I should draft with this pick. For alternatives, provide at least 1 player

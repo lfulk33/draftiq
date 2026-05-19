@@ -1,6 +1,7 @@
 import streamlit as st
 import json
 import time
+import math
 from datetime import datetime
 from sleeper_draft import get_picks, get_available_rookies, get_available_players, count_my_picks
 from sleeper_league import get_rosters, get_league, get_taxi_count, get_league_users
@@ -84,12 +85,16 @@ def build_league_context(league_detail, draft_detail, my_roster, picks, my_roste
             }
             for pid in (my_draft_picks or [])
         ],
-        "roster_needs": {
-            pos: max(0, total - sum(1 for p in my_existing_players + [
-                {"position": players.get(pid, {}).get("position")} 
+        "starter_needs": {
+            pos: max(0, math.ceil(starters) - sum(1 for p in my_existing_players + [
+                {"position": players.get(pid, {}).get("position")}
                 for pid in (my_draft_picks or [])
             ] if p.get("position") == pos))
-            for pos, total in calculate_roster_needs(league_detail)[2].items()
+            for pos, starters in calculate_roster_needs(league_detail)[0].items()
+        },
+        "backup_needs": {
+            pos: backups
+            for pos, backups in calculate_roster_needs(league_detail)[1].items()
         }
     }
 
