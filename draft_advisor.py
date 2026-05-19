@@ -297,6 +297,8 @@ BACKUP SLOTS NEEDED PER POSITION:
 {json.dumps(league_context.get("backup_needs", {}), indent=2)}
 
 - ROSTER CONSTRUCTION RULE: Prioritize filling positions where starter_needs > 0 before adding backups at covered positions.
+- BEST PLAYER AVAILABLE EXCEPTION: If the top available player has a dynasty value significantly higher (500+ points) than the best player available at your most needed position, consider taking the best player regardless of positional need. Elite value trumps positional scarcity in dynasty.
+- If a position is covered but the available player would immediately upgrade a starter slot (their value exceeds your weakest starter at that position), they are worth considering over a positional need pick.
 - FLEX slots can be filled by RB, WR, or TE. SUPER_FLEX can be filled by QB, RB, WR, or TE. WRRB_FLEX by RB or WR. REC_FLEX by WR or TE. The starter_needs above reflect fractional slot allocation across eligible positions. Use your judgment about which position best fills each flex slot based on roster construction and available depth.
 - A position is "covered" when starter_needs = 0. Only then consider backup needs.
 
