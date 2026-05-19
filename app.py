@@ -93,7 +93,7 @@ def build_league_context(league_detail, draft_detail, my_roster, picks, my_roste
         }
     }
 
-def render_roster(my_roster, players, league_detail, sim_active, sim_taxi):
+def render_roster(my_roster, players, league_detail, sim_active, sim_taxi, is_dynasty=True):
     from draft_advisor import calculate_starter_ids
 
     st.subheader("📊 Recommended Roster")
@@ -154,7 +154,7 @@ def render_roster(my_roster, players, league_detail, sim_active, sim_taxi):
                 else:
                     st.info(label)
 
-    if taxi_ids:
+    if taxi_ids and is_dynasty:
         st.divider()
         st.write("**🚕 Taxi Squad**")
         taxi_players = []
@@ -231,7 +231,7 @@ def render_setup():
 
     username = st.text_input("Sleeper username", value=SLEEPER_USERNAME)
 
-    if st.button("Load leagues"):
+    if st.button("Load leagues", key="load_leagues_btn"):
         with st.spinner("Fetching leagues..."):
             try:
                 from sleeper_league import get_user, get_leagues
@@ -244,13 +244,13 @@ def render_setup():
             except Exception as e:
                 st.error(f"Error fetching leagues: {e}")
 
-    if "leagues" in st.session_state:
+    if "leagues" in st.session_state and not st.session_state.connected:
         league_names = [l["name"] for l in st.session_state.leagues]
-        selected_league = st.selectbox("Select league", league_names)
+        selected_league = st.selectbox("Select league", league_names, key="setup_league_select")
         league_index = league_names.index(selected_league)
         league = st.session_state.leagues[league_index]
 
-        if st.button("Load drafts"):
+        if st.button("Load drafts", key="load_drafts_btn"):
             with st.spinner("Fetching drafts..."):
                 try:
                     from sleeper_draft import get_drafts
@@ -260,16 +260,16 @@ def render_setup():
                 except Exception as e:
                     st.error(f"Error fetching drafts: {e}")
 
-    if "drafts" in st.session_state:
+    if "drafts" in st.session_state and not st.session_state.connected:
         draft_labels = [
             f"{d.get('season', 'Unknown')} {d.get('metadata', {}).get('name', d['type'].title() + ' Draft')} (Rounds {d['settings'].get('rounds', '?')}) - {d['status'].replace('_', ' ').title()}"
             for d in st.session_state.drafts
         ]
-        selected_draft = st.selectbox("Select draft", draft_labels)
+        selected_draft = st.selectbox("Select draft", draft_labels, key="setup_draft_select")
         draft_index = draft_labels.index(selected_draft)
         draft = st.session_state.drafts[draft_index]
 
-        if st.button("Connect to draft"):
+        if st.button("Connect to draft", key="connect_to_draft_btn"):
             with st.spinner("Connecting..."):
                 try:
                     from sleeper_draft import get_draft_detail
@@ -299,6 +299,8 @@ def render_setup():
                     st.session_state.my_roster = my_roster
                     st.session_state.players = players
                     st.session_state.roster_to_team = roster_to_team
+                    for key in ["drafts", "leagues"]:
+                        st.session_state.pop(key, None)
                     st.rerun()
 
                 except Exception as e:
@@ -313,6 +315,7 @@ def render_draft():
     my_roster_id = st.session_state.my_roster_id
     league_detail = st.session_state.league_detail
     draft_detail = st.session_state.draft_detail
+    is_dynasty = league_detail.get("settings", {}).get("type", 0) == 2
     roster_to_team = st.session_state.roster_to_team
 
     rosters = get_rosters(st.session_state.league_id)
@@ -355,6 +358,13 @@ def render_draft():
     display_active = st.session_state.roster_sim_active if st.session_state.roster_sim_active else raw_sim_active
     display_taxi = st.session_state.roster_sim_taxi if st.session_state.roster_sim_taxi else raw_sim_taxi
 
+    st.sidebar.title("⚙️ Settings")
+    st.sidebar.write(f"**League:** {st.session_state.selected_league['name']}")
+    st.sidebar.write(f"**Draft status:** {draft_detail['status']}")
+    st.sidebar.write(f"**Last updated:** {st.session_state.last_refresh}")
+    auto_refresh = st.sidebar.toggle("Auto refresh", value=True)
+    refresh_interval = st.sidebar.slider("Refresh interval (seconds)", 10, 60, 15)
+
     from config import DEV_MODE
     if draft_detail.get("status") == "complete" and not DEV_MODE:
         if st.session_state.get("last_draft_status") != "complete":
@@ -385,7 +395,7 @@ def render_draft():
         roster_placeholder = st.empty()
         roster_placeholder.empty()
         with roster_placeholder.container():
-            render_roster(my_roster, players, league_detail, display_active, display_taxi)
+            render_roster(my_roster, players, league_detail, display_active, display_taxi, is_dynasty)
             render_roster_recommendations(st.session_state.roster_recommendations)
         return
 
@@ -478,37 +488,32 @@ def render_draft():
             st.warning("Recommendation limit reached for this session.")
 
     st.divider()
-    MAX_ANALYSES = 3
-    analyses_left = MAX_ANALYSES - st.session_state.get("analyze_calls", 0)
-    if analyses_left > 0:
-        if st.button(f"🔍 Analyze My Picks ({analyses_left} remaining)", key="analyze_live"):
-            st.session_state.roster_recommendations = []
-            st.session_state.roster_sim_active = {}
-            st.session_state.roster_sim_taxi = {}
-            with st.spinner("Claude is analyzing your roster moves..."):
-                recs, r_sim_active, r_sim_taxi = get_roster_recommendations(my_roster, players, league_detail, my_draft_picks, starter_ids)
-                st.session_state.roster_recommendations = recs
-                st.session_state.roster_sim_active = r_sim_active
-                st.session_state.roster_sim_taxi = r_sim_taxi
-            st.session_state.analyze_calls = st.session_state.get("analyze_calls", 0) + 1
-            display_active = st.session_state.roster_sim_active if st.session_state.roster_sim_active else raw_sim_active
-            display_taxi = st.session_state.roster_sim_taxi if st.session_state.roster_sim_taxi else raw_sim_taxi
-    else:
-        st.warning("Analysis limit reached for this session.")
+    if is_dynasty:
+        MAX_ANALYSES = 3
+        analyses_left = MAX_ANALYSES - st.session_state.get("analyze_calls", 0)
+        if analyses_left > 0:
+            if st.button(f"🔍 Analyze My Picks ({analyses_left} remaining)", key="analyze_live"):
+                st.session_state.roster_recommendations = []
+                st.session_state.roster_sim_active = {}
+                st.session_state.roster_sim_taxi = {}
+                with st.spinner("Claude is analyzing your roster moves..."):
+                    recs, r_sim_active, r_sim_taxi = get_roster_recommendations(my_roster, players, league_detail, my_draft_picks, starter_ids)
+                    st.session_state.roster_recommendations = recs
+                    st.session_state.roster_sim_active = r_sim_active
+                    st.session_state.roster_sim_taxi = r_sim_taxi
+                st.session_state.analyze_calls = st.session_state.get("analyze_calls", 0) + 1
+                display_active = st.session_state.roster_sim_active if st.session_state.roster_sim_active else raw_sim_active
+                display_taxi = st.session_state.roster_sim_taxi if st.session_state.roster_sim_taxi else raw_sim_taxi
+        else:
+            st.warning("Analysis limit reached for this session.")
 
     roster_placeholder = st.empty()
     roster_placeholder.empty()
     with roster_placeholder.container():
-        render_roster(my_roster, players, league_detail, display_active, display_taxi)
+        render_roster(my_roster, players, league_detail, display_active, display_taxi, is_dynasty)
         render_roster_recommendations(st.session_state.roster_recommendations)
 
-    st.sidebar.title("⚙️ Settings")
-    st.sidebar.write(f"**League:** {st.session_state.selected_league['name']}")
-    st.sidebar.write(f"**Draft status:** {draft_detail['status']}")
-    st.sidebar.write(f"**Last updated:** {st.session_state.last_refresh}")
-    auto_refresh = st.sidebar.toggle("Auto refresh", value=True)
-    refresh_interval = st.sidebar.slider("Refresh interval (seconds)", 10, 60, 15)
-
+    
     if auto_refresh:
         if "last_rerun" not in st.session_state:
             st.session_state.last_rerun = datetime.now()
@@ -521,8 +526,10 @@ def render_draft():
             st.rerun()
 
 init_session()
-
+setup_placeholder = st.empty()
 if st.session_state.connected:
+    setup_placeholder.empty()
     render_draft()
 else:
-    render_setup()
+    with setup_placeholder.container():
+        render_setup()
