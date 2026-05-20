@@ -50,7 +50,7 @@ def build_roster_to_team(users, rosters):
         roster_to_team[roster["roster_id"]] = team_name
     return roster_to_team
 
-def build_league_context(league_detail, draft_detail, my_roster, picks, my_roster_id, players, my_draft_picks=None, is_dynasty=True):
+def build_league_context(league_detail, draft_detail, my_roster, picks, my_roster_id, players, my_draft_picks=None, is_dynasty=True, starter_ids=None):
     from draft_advisor import calculate_roster_needs
     my_picks_count = count_my_picks(picks, my_roster_id)
     total_rounds = draft_detail["settings"].get("rounds", 4)
@@ -85,6 +85,14 @@ def build_league_context(league_detail, draft_detail, my_roster, picks, my_roste
                 "dynasty_value": players.get(pid, {}).get("fc_value", "unranked")
             }
             for pid in (my_draft_picks or [])
+        ],
+        "my_starters": [
+            {
+                "name": players.get(pid, {}).get("full_name"),
+                "position": players.get(pid, {}).get("position")
+            }
+            for pid in (starter_ids or [])
+            if players.get(pid)
         ],
         "starter_needs": {
             pos: max(0, dedicated - sum(1 for p in my_existing_players + [
@@ -359,7 +367,6 @@ def render_draft():
     available = get_available_rookies(players, picks) if rookie_draft else get_available_players(players, picks)
 
     my_draft_picks = [p["player_id"] for p in picks if p["roster_id"] == my_roster_id]
-    league_context = build_league_context(league_detail, draft_detail, my_roster, picks, my_roster_id, players, my_draft_picks, is_dynasty)
 #    print(f"starter_needs: {league_context.get('starter_needs')}")
 #    print(f"my_picks positions: {[p['position'] for p in league_context.get('my_picks_this_draft', [])]}")
     taxi_ids = set(get_taxi_players(my_roster))
@@ -369,6 +376,7 @@ def render_draft():
     active_ids = all_ids - taxi_ids
 
     starter_ids = calculate_starter_ids(active_ids, players, league_detail)
+    league_context = build_league_context(league_detail, draft_detail, my_roster, picks, my_roster_id, players, my_draft_picks, is_dynasty, starter_ids)
 
     def enrich_pid(pid):
         p = players.get(pid, {})
