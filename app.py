@@ -521,7 +521,7 @@ def render_draft():
         if calls_left > 0:
             if st.button(f"🎯 Get Recommendation ({calls_left} remaining)", key=f"rec_btn_{current_count}"):
                 with st.spinner("Getting recommendation..."):
-                    rec = get_recommendation(picks, available, my_roster, league_context, current_count + 1)
+                    rec = get_recommendation(picks, available, my_roster, league_context, current_count + 1, players)
                     st.session_state.recommendation = rec
                     st.session_state.claude_calls += 1
                     st.rerun()

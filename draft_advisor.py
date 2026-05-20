@@ -239,7 +239,7 @@ Write ONLY the reasoning as a plain string (2-3 sentences). No JSON, no preamble
     response = get_completion(prompt, system="You are a dynasty fantasy football expert. Write clear, concise reasoning in 2-3 sentences. No JSON, just plain text.")
     return response.strip()
 
-def build_prompt(picks, available, my_roster, league_context, pick_number):
+def build_prompt(picks, available, my_roster, league_context, pick_number, all_players=None):
     top_available = sorted(
         [p for p in available.values() if "fc_value" in p],
         key=lambda x: x["fc_value"],
@@ -267,8 +267,8 @@ def build_prompt(picks, available, my_roster, league_context, pick_number):
     qb_slots = sum(1 for p in roster_positions if p in ["QB", "SUPER_FLEX"])
     taxi_open = league_context.get("taxi_slots_total", 0) - league_context.get("taxi_slots_used", 0)
     picks_remaining = league_context.get("picks_remaining_for_me", 0)
-    bpa_player, suggested_pick, bpa_gap = calculate_bpa(available, league_context)
-    vorp_players, replacement = calculate_vorp(available, league_context)
+    bpa_player, suggested_pick, bpa_gap = calculate_bpa(available, league_context, all_players)
+    vorp_players, replacement = calculate_vorp(available, league_context, all_players)
     prompt = f"""You are advising on pick {pick_number} in a dynasty rookie draft.
 
 LEAGUE CONTEXT:
@@ -335,8 +335,8 @@ Respond with this exact JSON structure:
 }}"""
     return prompt
 
-def get_recommendation(picks, available, my_roster, league_context, pick_number):
-    prompt = build_prompt(picks, available, my_roster, league_context, pick_number)
+def get_recommendation(picks, available, my_roster, league_context, pick_number, all_players=None):
+    prompt = build_prompt(picks, available, my_roster, league_context, pick_number, all_players)
     response = get_completion(prompt, system=SYSTEM_PROMPT)
     try:
         rec = json.loads(response)
@@ -350,7 +350,7 @@ def get_recommendation(picks, available, my_roster, league_context, pick_number)
 
     return rec
 
-def calculate_vorp(available, league_context):
+def calculate_vorp(available, league_context, all_players=None):
     value_type = "fc_value" if league_context.get("is_dynasty") else "fc_redraft_value"
     num_teams = league_context.get("num_teams", 12)
     roster_positions = league_context.get("roster_positions", [])
@@ -380,16 +380,19 @@ def calculate_vorp(available, league_context):
             continue
         
         # Pool all available players eligible for this slot
+        player_pool = all_players if all_players else available
         pool = sorted(
-            [p for p in available.values() 
+            [p for p in player_pool.values() 
              if p.get("position") in eligible_positions and p.get(value_type, 0)],
             key=lambda x: x.get(value_type, 0),
             reverse=True
         )
         
-        # Replacement = value of player just outside the starting pool
-        if len(pool) > slot_count:
-            replacement_val = pool[slot_count].get(value_type, 0)
+        # Account for dedicated starters already filling non-flex slots
+        dedicated_starters = sum(dedicated.get(pos, 0) for pos in eligible_positions) * num_teams
+        adjusted_cutoff = slot_count + dedicated_starters
+        if len(pool) > adjusted_cutoff:
+            replacement_val = pool[adjusted_cutoff].get(value_type, 0)
         elif pool:
             replacement_val = pool[-1].get(value_type, 0)
         else:
@@ -402,13 +405,19 @@ def calculate_vorp(available, league_context):
     # Positional replacement level = (dedicated_slots * num_teams + 1)th best player
     positional_replacement = {}
     for pos in ["QB", "RB", "WR", "TE"]:
+        player_pool = all_players if all_players else available
         pos_players = sorted(
-            [p for p in available.values() 
+            [p for p in player_pool.values() 
              if p.get("position") == pos and p.get(value_type, 0)],
             key=lambda x: x.get(value_type, 0),
             reverse=True
         )
-        cutoff = dedicated[pos] * num_teams
+        flex_for_pos = sum(
+            sum(1 for s in roster_positions if s == slot_type)
+            for slot_type, eligible in flex_slots.items()
+            if pos in eligible
+        )
+        cutoff = (dedicated[pos] + flex_for_pos) * num_teams
         if len(pos_players) > cutoff:
             positional_replacement[pos] = pos_players[cutoff].get(value_type, 0)
         elif pos_players:
@@ -416,9 +425,12 @@ def calculate_vorp(available, league_context):
         else:
             positional_replacement[pos] = 0
 
-    # Final replacement = max of positional and flex replacement
+    # Final replacement:
+    # - Positions with dedicated slots: max of positional and flex replacement
+    # - Positions with NO dedicated slots: flex replacement only (must compete for flex)
     replacement = {
-        pos: max(positional_replacement.get(pos, 0), flex_replacement.get(pos, 0))
+        pos: flex_replacement.get(pos, 0) if dedicated.get(pos, 0) == 0
+        else max(positional_replacement.get(pos, 0), flex_replacement.get(pos, 0))
         for pos in ["QB", "RB", "WR", "TE"]
     }
 
@@ -438,13 +450,13 @@ def calculate_vorp(available, league_context):
 
     return vorp_players, replacement
 
-def calculate_bpa(available, league_context):
+def calculate_bpa(available, league_context, all_players=None):
     value_type = "fc_value" if league_context.get("is_dynasty") else "fc_redraft_value"
     threshold = league_context.get("bpa_threshold", 1000)
     starter_needs = league_context.get("starter_needs", {})
     backup_needs = league_context.get("backup_needs", {})
 
-    vorp_players, replacement = calculate_vorp(available, league_context)
+    vorp_players, replacement = calculate_vorp(available, league_context, all_players)
     if not vorp_players:
         return None, None, None
 
@@ -507,6 +519,10 @@ def calculate_bpa(available, league_context):
     positive_vorp = [v for v in vorp_players if v["vorp"] > 0]
     if positive_vorp:
         best = max(positive_vorp, key=lambda x: x["vorp"])
+        return None, best["player"], 0
+    # All players below replacement - return highest dynasty value available
+    if vorp_players:
+        best = max(vorp_players, key=lambda x: x["vorp"])
         return None, best["player"], 0
     return None, None, None
 
