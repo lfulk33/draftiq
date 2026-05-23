@@ -579,6 +579,9 @@ def calculate_bpa(available, league_context, all_players=None):
     total_active_capacity = active_capacity - taxi_capacity
     total_active_players = sum(picks_by_pos.values())
 
+    if DEV_MODE:
+        print(f"total_active_players: {total_active_players}, total_active_capacity: {total_active_capacity}")
+        print(f"taxi mode: {total_active_players >= total_active_capacity}")
     if total_active_players < total_active_capacity:
         # Active roster not full yet - recommend best positive VORP regardless of age
         positive_vorp = [v for v in vorp_players if v["vorp"] > 0]
