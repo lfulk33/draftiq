@@ -12,6 +12,19 @@
 - Claude should use redraft value as primary signal for taxi vs active bench decisions
 - Add dynasty/redraft toggle to roster panel display
 
+## Draft Strategy Modes
+- **Full Dynasty:** Pure VORP/value-based drafting, accumulate assets and trade for needs. Prioritizes long-term upside over immediate roster balance.
+- **Win Now:** Prioritizes redraft value and immediate contributors. Less developmental stashing, more proven veterans.
+- **Balanced:** Enforces positional limits and roster balance. Ensures starters at every position before taking backups or developmental players.
+- Each mode would adjust BPA threshold, positional cap enforcement, and Claude's reasoning priorities.
+
+## Dual Recommendation Display
+- Show two picks side by side: "Best Value" (highest VORP regardless of position) and "Balance Pick" (best VORP at most needed position)
+- Claude explains the tradeoff between the two options
+- User decides based on their strategy preference
+- Example: "Pure value: Cam Ward (QB, VORP 348) | Balance: Jordyn Tyson (WR, VORP 341) — Ward is the best available player but you already have 2 QBs and 0 WRs"
+- Maps naturally to strategy modes: Value Pick = Full Dynasty, Balance Pick = Balanced
+
 ## Draft Assistant
 - Manual pick entry mode for ESPN and Yahoo leagues (no API)
 - Multi-league profile support with saved configurations

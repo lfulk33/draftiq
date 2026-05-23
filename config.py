@@ -9,5 +9,5 @@ DEV_MODE = os.getenv("DEV_MODE", "false").lower() == "true"
 # Best player available thresholds
 # If top available player's value exceeds best available at needed position by this amount,
 # recommend best player regardless of positional need
-BPA_THRESHOLD_DYNASTY = 1000
+BPA_THRESHOLD_DYNASTY = 20
 BPA_THRESHOLD_REDRAFT = 800

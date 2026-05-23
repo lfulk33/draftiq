@@ -240,11 +240,17 @@ Write ONLY the reasoning as a plain string (2-3 sentences). No JSON, no preamble
     return response.strip()
 
 def build_prompt(picks, available, my_roster, league_context, pick_number, all_players=None):
-    top_available = sorted(
-        [p for p in available.values() if "fc_value" in p],
-        key=lambda x: x["fc_value"],
-        reverse=True
-    )[:20]
+    if league_context.get("is_dynasty"):
+        top_available = sorted(
+            [p for p in available.values() if "fc_overall_rank" in p],
+            key=lambda x: x["fc_overall_rank"]
+        )[:20]
+    else:
+        top_available = sorted(
+            [p for p in available.values() if "fc_redraft_value" in p],
+            key=lambda x: x.get("fc_redraft_value", 0),
+            reverse=True
+        )[:20]
 
     available_summary = []
     for p in top_available:
@@ -268,7 +274,20 @@ def build_prompt(picks, available, my_roster, league_context, pick_number, all_p
     taxi_open = league_context.get("taxi_slots_total", 0) - league_context.get("taxi_slots_used", 0)
     picks_remaining = league_context.get("picks_remaining_for_me", 0)
     bpa_player, suggested_pick, bpa_gap = calculate_bpa(available, league_context, all_players)
+    vorp_debug, rep_debug = calculate_vorp(available, league_context, all_players)
+    print(f"Replacement levels: {rep_debug}")
+    top5 = sorted(vorp_debug, key=lambda x: x['vorp'], reverse=True)[:5]
+    print(f"Top 5 VORP: {[(v['player'].get('full_name'), v['position'], round(v['vorp'])) for v in top5]}")
+    best_rb = sorted([p for p in available.values() if p.get('position') == 'RB' and p.get('fc_overall_rank')], key=lambda x: x['fc_overall_rank'])
+    if best_rb:
+        print(f"Best available RB: {best_rb[0].get('full_name')}, rank: {best_rb[0].get('fc_overall_rank')}")
+    best_qb = sorted([p for p in available.values() if p.get('position') == 'QB' and p.get('fc_overall_rank')], key=lambda x: x['fc_overall_rank'])
+    if best_qb:
+        print(f"Best available QB: {best_qb[0].get('full_name')}, rank: {best_qb[0].get('fc_overall_rank')}")
     vorp_players, replacement = calculate_vorp(available, league_context, all_players)
+    # Count picks already made by position (this draft + existing roster)
+    picks_by_pos = {}
+    
     prompt = f"""You are advising on pick {pick_number} in a dynasty rookie draft.
 
 LEAGUE CONTEXT:
@@ -352,6 +371,21 @@ def get_recommendation(picks, available, my_roster, league_context, pick_number,
 
 def calculate_vorp(available, league_context, all_players=None):
     value_type = "fc_value" if league_context.get("is_dynasty") else "fc_redraft_value"
+    is_dynasty = league_context.get("is_dynasty", True)
+    if is_dynasty:
+        max_rank = max((p.get("fc_overall_rank", 999) for p in available.values() if p.get("fc_overall_rank")), default=999)
+        vorp_players = []
+        for p in available.values():
+            rank = p.get("fc_overall_rank")
+            if rank:
+                vorp = max_rank - rank
+                vorp_players.append({
+                    "player": p,
+                    "vorp": vorp,
+                    "value": p.get("fc_value", 0),
+                    "position": p.get("position", "?")
+                })
+        return vorp_players, {}
     num_teams = league_context.get("num_teams", 12)
     roster_positions = league_context.get("roster_positions", [])
 
@@ -412,12 +446,16 @@ def calculate_vorp(available, league_context, all_players=None):
             key=lambda x: x.get(value_type, 0),
             reverse=True
         )
+        bench_slots = sum(1 for s in roster_positions if s == "BN")
         flex_for_pos = sum(
             sum(1 for s in roster_positions if s == slot_type)
             for slot_type, eligible in flex_slots.items()
             if pos in eligible
         )
-        cutoff = (dedicated[pos] + flex_for_pos) * num_teams
+        # Use starting slots + proportional bench allocation
+        # Bench slots are split roughly equally among skill positions (QB, RB, WR, TE)
+        bench_per_pos = bench_slots / 4
+        cutoff = int((dedicated[pos] + flex_for_pos + bench_per_pos) * num_teams)
         if len(pos_players) > cutoff:
             positional_replacement[pos] = pos_players[cutoff].get(value_type, 0)
         elif pos_players:
@@ -430,7 +468,7 @@ def calculate_vorp(available, league_context, all_players=None):
     # - Positions with NO dedicated slots: flex replacement only (must compete for flex)
     replacement = {
         pos: flex_replacement.get(pos, 0) if dedicated.get(pos, 0) == 0
-        else max(positional_replacement.get(pos, 0), flex_replacement.get(pos, 0))
+        else positional_replacement.get(pos, 0)
         for pos in ["QB", "RB", "WR", "TE"]
     }
 
@@ -460,7 +498,6 @@ def calculate_bpa(available, league_context, all_players=None):
     if not vorp_players:
         return None, None, None
 
-    # Count picks already made by position (this draft + existing roster)
     picks_by_pos = {}
     for p in league_context.get("my_picks_this_draft", []) + league_context.get("my_existing_roster", []):
         pos = p.get("position", "?")
@@ -468,12 +505,16 @@ def calculate_bpa(available, league_context, all_players=None):
 
     # Dedicated starter counts
     dedicated = {
-        "QB": sum(1 for s in league_context.get("roster_positions", []) if s == "QB"),
-        "RB": sum(1 for s in league_context.get("roster_positions", []) if s == "RB"),
-        "WR": sum(1 for s in league_context.get("roster_positions", []) if s == "WR"),
-        "TE": sum(1 for s in league_context.get("roster_positions", []) if s == "TE"),
+        "QB": sum(1 for s in league_context.get("roster_positions", []) if s in ["QB", "SUPER_FLEX"]),
+        "RB": sum(1 for s in league_context.get("roster_positions", []) if s in ["RB", "FLEX", "WRRB_FLEX"]),
+        "WR": sum(1 for s in league_context.get("roster_positions", []) if s in ["WR", "FLEX", "REC_FLEX", "WRRB_FLEX"]),
+        "TE": sum(1 for s in league_context.get("roster_positions", []) if s in ["TE", "FLEX", "REC_FLEX"]),
     }
 
+    at_capacity = [
+        pos for pos in ["QB", "RB", "WR", "TE"]
+        if picks_by_pos.get(pos, 0) >= dedicated.get(pos, 0) + backup_needs.get(pos, 0)
+    ]
     # PHASE 1: Unfilled starter slots
     needed_positions = [pos for pos, need in starter_needs.items() if need > 0]
     if needed_positions:
@@ -485,7 +526,13 @@ def calculate_bpa(available, league_context, all_players=None):
         if not best_needed_vorp:
             return None, None, None
 
-        best_overall_vorp = max(vorp_players, key=lambda x: x["vorp"])
+        # Exclude positions already at capacity from BPA consideration
+        at_capacity = [
+            pos for pos in ["QB", "RB", "WR", "TE"]
+            if picks_by_pos.get(pos, 0) >= dedicated.get(pos, 0) + backup_needs.get(pos, 0)
+        ]
+        eligible_for_bpa = [v for v in vorp_players if v["position"] not in at_capacity]
+        best_overall_vorp = max(eligible_for_bpa, key=lambda x: x["vorp"]) if eligible_for_bpa else best_needed_vorp
         gap = best_overall_vorp["vorp"] - best_needed_vorp["vorp"]
 
         if gap > threshold and best_overall_vorp["position"] not in needed_positions:
@@ -508,13 +555,17 @@ def calculate_bpa(available, league_context, all_players=None):
         if not best_needed_vorp:
             return None, None, None
 
-        best_overall_vorp = max(vorp_players, key=lambda x: x["vorp"])
+        eligible_for_bpa = [v for v in vorp_players if v["position"] not in at_capacity]
+        best_overall_vorp = max(eligible_for_bpa, key=lambda x: x["vorp"]) if eligible_for_bpa else best_needed_vorp
         gap = best_overall_vorp["vorp"] - best_needed_vorp["vorp"]
 
         if gap > threshold and best_overall_vorp["position"] not in needed_backup_positions:
             return best_overall_vorp["player"], best_needed_vorp["player"], gap
         return None, best_needed_vorp["player"], gap
 
+    print(f"Phase: {'1-starters' if needed_positions else '2-backups' if needed_backup_positions else '3-taxi'}")
+    print(f"at_capacity: {at_capacity}")
+    print(f"bpa check - best overall: {max(vorp_players, key=lambda x: x['vorp'])['player'].get('full_name') if vorp_players else None}")
     # PHASE 3: All starters and backups filled - taxi territory
     positive_vorp = [v for v in vorp_players if v["vorp"] > 0]
     if positive_vorp:
