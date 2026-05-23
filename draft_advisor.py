@@ -1,6 +1,7 @@
 import json
 import math
 from llm_client import get_completion
+from config import DEV_MODE
 
 SYSTEM_PROMPT = """You are an expert dynasty fantasy football draft assistant. 
 You reason about long-term player value, age curves, and positional scarcity.
@@ -274,21 +275,22 @@ def build_prompt(picks, available, my_roster, league_context, pick_number, all_p
     taxi_open = league_context.get("taxi_slots_total", 0) - league_context.get("taxi_slots_used", 0)
     picks_remaining = league_context.get("picks_remaining_for_me", 0)
     bpa_player, suggested_pick, bpa_gap = calculate_bpa(available, league_context, all_players)
-    vorp_debug, rep_debug = calculate_vorp(available, league_context, all_players)
-    top5 = sorted(vorp_debug, key=lambda x: x['vorp'], reverse=True)[:5]
-    print(f"Top 5 VORP: {[(v['player'].get('full_name'), v['position'], round(v['vorp'])) for v in top5]}")
-    best_te = sorted([p for p in available.values() if p.get('position') == 'TE' and p.get('fc_overall_rank')], key=lambda x: x['fc_overall_rank'])
-    if best_te:
-        print(f"Best available TE: {best_te[0].get('full_name')}, rank: {best_te[0].get('fc_overall_rank')}")
-    best_wr = sorted([p for p in available.values() if p.get('position') == 'WR' and p.get('fc_overall_rank')], key=lambda x: x['fc_overall_rank'])
-    if best_wr:
-        print(f"Best available WR: {best_wr[0].get('full_name')}, rank: {best_wr[0].get('fc_overall_rank')}")
-    best_rb = sorted([p for p in available.values() if p.get('position') == 'RB' and p.get('fc_overall_rank')], key=lambda x: x['fc_overall_rank'])
-    if best_rb:
-        print(f"Best available RB: {best_rb[0].get('full_name')}, rank: {best_rb[0].get('fc_overall_rank')}")
-    best_qb = sorted([p for p in available.values() if p.get('position') == 'QB' and p.get('fc_overall_rank')], key=lambda x: x['fc_overall_rank'])
-    if best_qb:
-        print(f"Best available QB: {best_qb[0].get('full_name')}, rank: {best_qb[0].get('fc_overall_rank')}")
+    if DEV_MODE:
+        vorp_debug, rep_debug = calculate_vorp(available, league_context, all_players)
+        top5 = sorted(vorp_debug, key=lambda x: x['vorp'], reverse=True)[:5]
+        print(f"Top 5 VORP: {[(v['player'].get('full_name'), v['position'], round(v['vorp'])) for v in top5]}")
+        best_te = sorted([p for p in available.values() if p.get('position') == 'TE' and p.get('fc_overall_rank')], key=lambda x: x['fc_overall_rank'])
+        if best_te:
+            print(f"Best available TE: {best_te[0].get('full_name')}, rank: {best_te[0].get('fc_overall_rank')}")
+        best_wr = sorted([p for p in available.values() if p.get('position') == 'WR' and p.get('fc_overall_rank')], key=lambda x: x['fc_overall_rank'])
+        if best_wr:
+            print(f"Best available WR: {best_wr[0].get('full_name')}, rank: {best_wr[0].get('fc_overall_rank')}")
+        best_rb = sorted([p for p in available.values() if p.get('position') == 'RB' and p.get('fc_overall_rank')], key=lambda x: x['fc_overall_rank'])
+        if best_rb:
+            print(f"Best available RB: {best_rb[0].get('full_name')}, rank: {best_rb[0].get('fc_overall_rank')}")
+        best_qb = sorted([p for p in available.values() if p.get('position') == 'QB' and p.get('fc_overall_rank')], key=lambda x: x['fc_overall_rank'])
+        if best_qb:
+            print(f"Best available QB: {best_qb[0].get('full_name')}, rank: {best_qb[0].get('fc_overall_rank')}")    
     vorp_players, replacement = calculate_vorp(available, league_context, all_players)
     # Count picks already made by position (this draft + existing roster)
     picks_by_pos = {}

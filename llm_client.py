@@ -1,6 +1,7 @@
 import anthropic
 import os
 from dotenv import load_dotenv
+from config import DEV_MODE
 
 load_dotenv()
 
@@ -37,7 +38,8 @@ def _call_claude(prompt, max_tokens, system):
     input_tokens = response.usage.input_tokens
     output_tokens = response.usage.output_tokens
     cost = (input_tokens / 1_000_000 * 3) + (output_tokens / 1_000_000 * 15)
-    print(f"[Claude] input:{input_tokens} output:{output_tokens} cost:${cost:.4f}")
+    if DEV_MODE:
+        print(f"[Claude] input:{input_tokens} output:{output_tokens} cost:${cost:.4f}")
     
     return response.content[0].text
         
