@@ -370,7 +370,8 @@ def get_recommendation(picks, available, my_roster, league_context, pick_number,
         clean = response.strip().removeprefix("```json").removesuffix("```").strip()
         rec = json.loads(clean)
 
-    tier, gap = calculate_confidence(rec.get("recommendation"), available, rec.get("alternatives", []))
+    is_dynasty = league_context.get("is_dynasty", True)
+    tier, gap = calculate_confidence(rec.get("recommendation"), available, rec.get("alternatives", []), is_dynasty)
     rec["confidence_tier"] = tier
     rec["confidence_gap"] = gap
 
@@ -570,43 +571,68 @@ def calculate_bpa(available, league_context, all_players=None):
             return best_overall_vorp["player"], best_needed_vorp["player"], gap
         return None, best_needed_vorp["player"], gap
 
-    # PHASE 3: All starters and backups filled - taxi territory
+    # PHASE 3: All starters and backups filled
     taxi_allow_vets = league_context.get("taxi_allow_vets", 0)
-    positive_vorp = [
-        v for v in vorp_players 
-        if v["vorp"] > 0 and (
-            v["player"].get("years_exp", 99) == 0 or taxi_allow_vets == 1
-        )
-    ]
+    roster_positions = league_context.get("roster_positions", [])
+    active_capacity = sum(1 for s in roster_positions if s not in ["BN", "K", "DEF"]) + sum(1 for s in roster_positions if s == "BN")
+    taxi_capacity = league_context.get("taxi_slots_total", 0)
+    total_active_capacity = active_capacity - taxi_capacity
+    total_active_players = sum(picks_by_pos.values())
+
+    if total_active_players < total_active_capacity:
+        # Active roster not full yet - recommend best positive VORP regardless of age
+        positive_vorp = [v for v in vorp_players if v["vorp"] > 0]
+    else:
+        # Active roster full - taxi territory only
+        positive_vorp = [
+            v for v in vorp_players
+            if v["vorp"] > 0 and (
+                v["player"].get("years_exp", 99) == 0 or taxi_allow_vets == 1
+            )
+        ]
+
     if positive_vorp:
         best = max(positive_vorp, key=lambda x: x["vorp"])
         return None, best["player"], 0
-    # All players below replacement - return highest dynasty value available
     if vorp_players:
         best = max(vorp_players, key=lambda x: x["vorp"])
         return None, best["player"], 0
     return None, None, None
 
-def calculate_confidence(recommendation_name, available, alternatives):
-    ranked = sorted(
-        [p for p in available.values() if "fc_value" in p],
-        key=lambda x: x["fc_value"],
-        reverse=True
-    )
-
-    if len(ranked) < 2:
-        return "high", None
-
-    top = ranked[0]
-    second = ranked[1]
-    gap = top.get("fc_value", 0) - second.get("fc_value", 0)
-
-    if gap >= 300:
-        tier = "high"
-    elif gap >= 100:
-        tier = "medium"
+def calculate_confidence(recommendation_name, available, alternatives, is_dynasty=True):
+    if is_dynasty:
+        ranked = sorted(
+            [p for p in available.values() if "fc_overall_rank" in p],
+            key=lambda x: x["fc_overall_rank"]
+        )
+        if len(ranked) < 2:
+            return "high", None
+        top = ranked[0]
+        second = ranked[1]
+        gap = second.get("fc_overall_rank", 0) - top.get("fc_overall_rank", 0)
+        if gap >= 10:
+            tier = "high"
+        elif gap >= 4:
+            tier = "medium"
+        else:
+            tier = "low"
     else:
-        tier = "low"
+        ranked = sorted(
+            [p for p in available.values() if "fc_redraft_value" in p],
+            key=lambda x: x["fc_redraft_value"],
+            reverse=True
+        )
+        if len(ranked) < 2:
+            return "high", None
+        top = ranked[0]
+        second = ranked[1]
+        gap = top.get("fc_redraft_value", 0) - second.get("fc_redraft_value", 0)
+        if gap >= 300:
+            tier = "high"
+        elif gap >= 100:
+            tier = "medium"
+        else:
+            tier = "low"
 
     return tier, gap
 

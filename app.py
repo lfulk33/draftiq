@@ -494,13 +494,13 @@ def render_draft():
 
             if confidence == "high":
                 st.success(f"### {rec['recommendation']} ({rec['position']}){rec_val_str}")
-                st.success(f"🟢 High confidence — value gap of {gap} points over next best")
+                st.success(f"🟢 High confidence — {'rank gap of ' + str(gap) + ' positions' if is_dynasty else 'value gap of ' + str(gap) + ' points'} over next best")
             elif confidence == "medium":
                 st.warning(f"### {rec['recommendation']} ({rec['position']}){rec_val_str}")
-                st.warning(f"🟡 Medium confidence — value gap of {gap} points over next best")
+                st.warning(f"🟡 Medium confidence — {'rank gap of ' + str(gap) + ' positions' if is_dynasty else 'value gap of ' + str(gap) + ' points'} over next best")
             else:
                 st.error(f"### {rec['recommendation']} ({rec['position']}){rec_val_str}")
-                st.error(f"🔴 Low confidence — coin flip territory, gap of {gap} points")
+                st.error(f"🔴 Low confidence — coin flip territory, {'rank gap of ' + str(gap) + ' positions' if is_dynasty else 'gap of ' + str(gap) + ' points'}")
 
             st.write(f"**Reasoning:** {rec['reasoning']}")
             st.write(f"**Positional note:** {rec['positional_note']}")
