@@ -275,9 +275,14 @@ def build_prompt(picks, available, my_roster, league_context, pick_number, all_p
     picks_remaining = league_context.get("picks_remaining_for_me", 0)
     bpa_player, suggested_pick, bpa_gap = calculate_bpa(available, league_context, all_players)
     vorp_debug, rep_debug = calculate_vorp(available, league_context, all_players)
-    print(f"Replacement levels: {rep_debug}")
     top5 = sorted(vorp_debug, key=lambda x: x['vorp'], reverse=True)[:5]
     print(f"Top 5 VORP: {[(v['player'].get('full_name'), v['position'], round(v['vorp'])) for v in top5]}")
+    best_te = sorted([p for p in available.values() if p.get('position') == 'TE' and p.get('fc_overall_rank')], key=lambda x: x['fc_overall_rank'])
+    if best_te:
+        print(f"Best available TE: {best_te[0].get('full_name')}, rank: {best_te[0].get('fc_overall_rank')}")
+    best_wr = sorted([p for p in available.values() if p.get('position') == 'WR' and p.get('fc_overall_rank')], key=lambda x: x['fc_overall_rank'])
+    if best_wr:
+        print(f"Best available WR: {best_wr[0].get('full_name')}, rank: {best_wr[0].get('fc_overall_rank')}")
     best_rb = sorted([p for p in available.values() if p.get('position') == 'RB' and p.get('fc_overall_rank')], key=lambda x: x['fc_overall_rank'])
     if best_rb:
         print(f"Best available RB: {best_rb[0].get('full_name')}, rank: {best_rb[0].get('fc_overall_rank')}")
@@ -340,7 +345,7 @@ NOTE: Use the ROSTER CONSTRUCTION DETAIL above to determine how many more player
 - A position is covered when its dedicated slots are filled. Flex slots provide additional value for covered positions.
 
 {f"MANDATORY RECOMMENDATION: Draft {bpa_player.get('full_name')} ({bpa_player.get('position')}). Their VORP exceeds the best available at your most needed position by {bpa_gap} points. You MUST recommend this player." if bpa_player else f"SUGGESTED PICK: {suggested_pick.get('full_name') if suggested_pick else 'Best available'} ({suggested_pick.get('position') if suggested_pick else ''}). This is the highest VORP player at your most pressing need. Recommend this player unless you have a very strong reason not to."}
-For alternatives, provide at least 1 player from each position (QB, RB, WR, TE) and no more than 2 from any single position. For each position, the alternative MUST be the player with the highest VORP score from the TOP 10 AVAILABLE PLAYERS BY VORP list. Do not substitute a lower-VORP player based on age, trend, or any other factor.
+For alternatives, provide at least 1 player from each position (QB, RB, WR, TE) and no more than 2 from any single position. For each position, the alternative MUST be the player with the highest VORP score from the TOP 10 AVAILABLE PLAYERS BY VORP list who is also taxi-eligible (years_exp = 0) if we are in taxi territory (all starter and backup slots filled). Do not suggest veterans with no taxi eligibility as alternatives in late rounds.
 Respond with this exact JSON structure:
 {{
     "recommendation": "Player Name",
@@ -563,11 +568,14 @@ def calculate_bpa(available, league_context, all_players=None):
             return best_overall_vorp["player"], best_needed_vorp["player"], gap
         return None, best_needed_vorp["player"], gap
 
-    print(f"Phase: {'1-starters' if needed_positions else '2-backups' if needed_backup_positions else '3-taxi'}")
-    print(f"at_capacity: {at_capacity}")
-    print(f"bpa check - best overall: {max(vorp_players, key=lambda x: x['vorp'])['player'].get('full_name') if vorp_players else None}")
     # PHASE 3: All starters and backups filled - taxi territory
-    positive_vorp = [v for v in vorp_players if v["vorp"] > 0]
+    taxi_allow_vets = league_context.get("taxi_allow_vets", 0)
+    positive_vorp = [
+        v for v in vorp_players 
+        if v["vorp"] > 0 and (
+            v["player"].get("years_exp", 99) == 0 or taxi_allow_vets == 1
+        )
+    ]
     if positive_vorp:
         best = max(positive_vorp, key=lambda x: x["vorp"])
         return None, best["player"], 0

@@ -75,6 +75,7 @@ def build_league_context(league_detail, draft_detail, my_roster, picks, my_roste
         "taxi_slots_total": league_detail["settings"].get("taxi_slots"),
         "taxi_slots_used": get_taxi_count(my_roster),
         "taxi_years": league_detail["settings"].get("taxi_years"),
+        "taxi_allow_vets": league_detail["settings"].get("taxi_allow_vets", 0),
         "picks_made_by_me": my_picks_count,
         "picks_remaining_for_me": total_rounds - my_picks_count,
         "my_existing_roster": my_existing_players,
