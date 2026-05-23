@@ -60,10 +60,14 @@ def build_league_context(league_detail, draft_detail, my_roster, picks, my_roste
         player = players.get(pid, {})
         if player:
             my_existing_players.append({
+                "id": pid,
                 "name": player.get("full_name"),
                 "position": player.get("position"),
                 "age": player.get("fc_age") or player.get("age"),
-                "dynasty_value": player.get("fc_value", "unranked")
+                "dynasty_value": player.get("fc_value", 0),
+                "redraft_value": player.get("fc_redraft_value", 0),
+                "years_exp": player.get("years_exp", 99),
+                "overall_rank": player.get("fc_overall_rank", 999),
             })
 
     return {
@@ -81,9 +85,13 @@ def build_league_context(league_detail, draft_detail, my_roster, picks, my_roste
         "my_existing_roster": my_existing_players,
         "my_picks_this_draft": [
             {
+                "id": pid,
                 "name": players.get(pid, {}).get("full_name", "Unknown"),
                 "position": players.get(pid, {}).get("position", "?"),
-                "dynasty_value": players.get(pid, {}).get("fc_value", "unranked")
+                "dynasty_value": players.get(pid, {}).get("fc_value", 0),
+                "redraft_value": players.get(pid, {}).get("fc_redraft_value", 0),
+                "years_exp": players.get(pid, {}).get("years_exp", 99),
+                "overall_rank": players.get(pid, {}).get("fc_overall_rank", 999),
             }
             for pid in (my_draft_picks or [])
         ],

@@ -496,111 +496,239 @@ def calculate_vorp(available, league_context, all_players=None):
 
     return vorp_players, replacement
 
+def simulate_placement(candidate, sim_active, sim_taxi, league_context):
+    """
+    Simulate where a candidate player would land on the roster.
+    Returns (placement, cut_candidate) where placement is one of:
+    STARTER, ACTIVE_BENCH, TAXI, CUT
+    and cut_candidate is the player who would be cut to make room (or None)
+    """
+    roster_positions = league_context.get("roster_positions", [])
+    taxi_slots_total = league_context.get("taxi_slots_total", 0) or 0
+    taxi_allow_vets = league_context.get("taxi_allow_vets", 0)
+    
+    # Calculate active roster capacity (all slots except taxi)
+    total_slots = sum(1 for s in roster_positions if s not in ["K", "DEF"])
+    active_capacity = total_slots - taxi_slots_total
+    
+    taxi_eligible = candidate.get("years_exp", 99) == 0 or taxi_allow_vets == 1
+    
+    # Build sorted active roster by redraft value descending
+    all_active = sorted(
+        list(sim_active.values()) + [candidate],
+        key=lambda x: x.get("redraft_value", 0),
+        reverse=True
+    )
+    
+    # Find candidate's rank in active roster
+    candidate_rank = next(
+        i + 1 for i, p in enumerate(all_active) 
+        if p.get("id") == candidate.get("id")
+    )
+    
+    if candidate_rank <= active_capacity:
+        # Candidate fits on active roster
+        if len(sim_active) < active_capacity:
+            # Active roster not full, no cuts needed
+            if candidate_rank == 1:
+                return "STARTER", None
+            return "ACTIVE_BENCH", None
+        else:
+            # Active roster full, someone gets bumped
+            bumped = all_active[active_capacity]  # player just outside active capacity
+            if bumped.get("id") == candidate.get("id"):
+                # Candidate is the one being bumped, shouldn't happen here
+                pass
+            # Bumped player goes to taxi if eligible, otherwise cut
+            bumped_taxi_eligible = bumped.get("years_exp", 99) == 0 or taxi_allow_vets == 1
+            if bumped_taxi_eligible and len(sim_taxi) < taxi_slots_total:
+                return "ACTIVE_BENCH", None  # bumped goes to taxi, no cut
+            else:
+                return "ACTIVE_BENCH", bumped  # bumped gets cut
+    else:
+        # Candidate doesn't fit on active roster
+        if taxi_eligible and len(sim_taxi) < taxi_slots_total:
+            return "TAXI", None
+        elif taxi_eligible and len(sim_taxi) >= taxi_slots_total:
+            # Taxi full, find lowest value taxi player
+            lowest_t
+
+def calculate_redraft_replacement(league_context, all_players):
+    """Calculate redraft replacement levels for positional need assessment."""
+    num_teams = league_context.get("num_teams", 12)
+    roster_positions = league_context.get("roster_positions", [])
+    flex_slots = {
+        "FLEX": {"RB", "WR", "TE"},
+        "SUPER_FLEX": {"QB", "RB", "WR", "TE"},
+        "WRRB_FLEX": {"RB", "WR"},
+        "REC_FLEX": {"WR", "TE"},
+    }
+    dedicated = {
+        "QB": sum(1 for s in roster_positions if s == "QB"),
+        "RB": sum(1 for s in roster_positions if s == "RB"),
+        "WR": sum(1 for s in roster_positions if s == "WR"),
+        "TE": sum(1 for s in roster_positions if s == "TE"),
+    }
+    replacement = {}
+    for pos in ["QB", "RB", "WR", "TE"]:
+        flex_count = sum(
+            sum(1 for s in roster_positions if s == slot_type)
+            for slot_type, eligible in flex_slots.items()
+            if pos in eligible
+        )
+        bench_slots = sum(1 for s in roster_positions if s == "BN")
+        bench_per_pos = bench_slots / 4
+        cutoff = int((dedicated[pos] + flex_count + bench_per_pos) * num_teams)
+        player_pool = all_players if all_players else {}
+        pos_players = sorted(
+            [p for p in player_pool.values() if p.get("position") == pos and p.get("fc_redraft_value", 0)],
+            key=lambda x: x.get("fc_redraft_value", 0),
+            reverse=True
+        )
+        if len(pos_players) > cutoff:
+            replacement[pos] = pos_players[cutoff].get("fc_redraft_value", 0)
+        elif pos_players:
+            replacement[pos] = pos_players[-1].get("fc_redraft_value", 0)
+        else:
+            replacement[pos] = 0
+    return replacement
+
 def calculate_bpa(available, league_context, all_players=None):
     value_type = "fc_value" if league_context.get("is_dynasty") else "fc_redraft_value"
     threshold = league_context.get("bpa_threshold", 1000)
-    starter_needs = league_context.get("starter_needs", {})
-    backup_needs = league_context.get("backup_needs", {})
 
     vorp_players, replacement = calculate_vorp(available, league_context, all_players)
     if not vorp_players:
         return None, None, None
 
-    picks_by_pos = {}
-    for p in league_context.get("my_picks_this_draft", []) + league_context.get("my_existing_roster", []):
-        pos = p.get("position", "?")
-        picks_by_pos[pos] = picks_by_pos.get(pos, 0) + 1
-
-    # Dedicated starter counts
-    dedicated = {
-        "QB": sum(1 for s in league_context.get("roster_positions", []) if s in ["QB", "SUPER_FLEX"]),
-        "RB": sum(1 for s in league_context.get("roster_positions", []) if s in ["RB", "FLEX", "WRRB_FLEX"]),
-        "WR": sum(1 for s in league_context.get("roster_positions", []) if s in ["WR", "FLEX", "REC_FLEX", "WRRB_FLEX"]),
-        "TE": sum(1 for s in league_context.get("roster_positions", []) if s in ["TE", "FLEX", "REC_FLEX"]),
-    }
-
-    at_capacity = [
-        pos for pos in ["QB", "RB", "WR", "TE"]
-        if picks_by_pos.get(pos, 0) >= dedicated.get(pos, 0) + backup_needs.get(pos, 0)
-    ]
-    # PHASE 1: Unfilled starter slots
-    needed_positions = [pos for pos, need in starter_needs.items() if need > 0]
-    if needed_positions:
-        best_needed_vorp = max(
-            (v for v in vorp_players if v["position"] in needed_positions),
-            key=lambda x: x["vorp"],
-            default=None
-        )
-        if not best_needed_vorp:
-            return None, None, None
-
-        # Exclude positions already at capacity from BPA consideration
-        at_capacity = [
-            pos for pos in ["QB", "RB", "WR", "TE"]
-            if picks_by_pos.get(pos, 0) >= dedicated.get(pos, 0) + backup_needs.get(pos, 0)
-        ]
-        eligible_for_bpa = [v for v in vorp_players if v["position"] not in at_capacity]
-        best_overall_vorp = max(eligible_for_bpa, key=lambda x: x["vorp"]) if eligible_for_bpa else best_needed_vorp
-        gap = best_overall_vorp["vorp"] - best_needed_vorp["vorp"]
-
-        if gap > threshold and best_overall_vorp["position"] not in needed_positions:
-            return best_overall_vorp["player"], best_needed_vorp["player"], gap
-        return None, best_needed_vorp["player"], gap
-
-    # PHASE 2: Unfilled backup slots
-    backup_unfilled = {
-        pos: max(0, dedicated.get(pos, 0) + backup_needs.get(pos, 0) - picks_by_pos.get(pos, 0))
-        for pos in ["QB", "RB", "WR", "TE"]
-    }
-    needed_backup_positions = [pos for pos, need in backup_unfilled.items() if need > 0]
-
-    if needed_backup_positions:
-        best_needed_vorp = max(
-            (v for v in vorp_players if v["position"] in needed_backup_positions),
-            key=lambda x: x["vorp"],
-            default=None
-        )
-        if not best_needed_vorp:
-            return None, None, None
-
-        eligible_for_bpa = [v for v in vorp_players if v["position"] not in at_capacity]
-        best_overall_vorp = max(eligible_for_bpa, key=lambda x: x["vorp"]) if eligible_for_bpa else best_needed_vorp
-        gap = best_overall_vorp["vorp"] - best_needed_vorp["vorp"]
-
-        if gap > threshold and best_overall_vorp["position"] not in needed_backup_positions:
-            return best_overall_vorp["player"], best_needed_vorp["player"], gap
-        return None, best_needed_vorp["player"], gap
-
-    # PHASE 3: All starters and backups filled
-    taxi_allow_vets = league_context.get("taxi_allow_vets", 0)
+    # Build sim state from existing roster + draft picks
+    all_picks = (
+        league_context.get("my_picks_this_draft", []) + 
+        league_context.get("my_existing_roster", [])
+    )
+    if DEV_MODE:
+        print(f"my_picks_this_draft: {len(league_context.get('my_picks_this_draft', []))}")
+        print(f"my_existing_roster: {len(league_context.get('my_existing_roster', []))}")
+        print(f"all_picks total: {len(all_picks)}")
+    
     roster_positions = league_context.get("roster_positions", [])
-    active_capacity = sum(1 for s in roster_positions if s not in ["BN", "K", "DEF"]) + sum(1 for s in roster_positions if s == "BN")
-    taxi_capacity = league_context.get("taxi_slots_total", 0)
-    total_active_capacity = active_capacity - taxi_capacity
-    total_active_players = sum(picks_by_pos.values())
+    taxi_slots_total = league_context.get("taxi_slots_total", 0) or 0
+    taxi_allow_vets = league_context.get("taxi_allow_vets", 0)
+    total_slots = sum(1 for s in roster_positions if s not in ["K", "DEF"])
+    active_capacity = total_slots - taxi_slots_total
+
+    # Sort all picks by redraft value to determine who's active vs taxi
+    sorted_picks = sorted(all_picks, key=lambda x: x.get("redraft_value", 0), reverse=True)
+    
+    sim_active = {}
+    sim_taxi = {}
+    if DEV_MODE:
+        print(f"sorted_picks count: {len(sorted_picks)}")
+        if sorted_picks:
+            print(f"first pick sample: {sorted_picks[0]}")
+    for p in sorted_picks:
+        pid = p.get("id", p.get("name"))  # use id if available, name as fallback
+        if not pid:
+            continue
+        if len(sim_active) < active_capacity:
+            sim_active[pid] = p
+        elif (p.get("years_exp", 99) == 0 or taxi_allow_vets == 1) and len(sim_taxi) < taxi_slots_total:
+            sim_taxi[pid] = p
+        # else: cut, don't add to sim
+    if DEV_MODE:
+        print(f"After sim build - sim_active: {len(sim_active)}, sim_taxi: {len(sim_taxi)}")
+        qbs = [p for p in sim_active.values() if p.get('position') == 'QB']
+        print(f"QBs in sim: {[(p.get('name'), p.get('redraft_value')) for p in qbs]}")
+        print(f"sim_taxi players: {[(p.get('name'), p.get('redraft_value')) for p in sim_taxi.values()]}")
+        print(f"sim_active QBs: {[(p.get('name'), p.get('redraft_value')) for p in sim_active.values() if p.get('position') == 'QB']}")
+    # Sort vorp_players by vorp descending
+    sorted_vorp = sorted(vorp_players, key=lambda x: x["vorp"], reverse=True)
+
+    # Filter out players who would be CUT with no room
+    viable = []
+    for v in sorted_vorp:
+        player = v["player"]
+        candidate = {
+            "id": player.get("sleeper_id") or player.get("full_name"),
+            "name": player.get("full_name"),
+            "position": player.get("position"),
+            "dynasty_value": player.get("fc_value", 0),
+            "redraft_value": player.get("fc_redraft_value", 0),
+            "years_exp": player.get("years_exp", 99),
+            "overall_rank": player.get("fc_overall_rank", 999),
+        }
+        placement, cut_candidate = simulate_placement(candidate, sim_active, sim_taxi, league_context)
+        if placement == "CUT" and cut_candidate is None:
+            continue
+        if placement == "CUT" and cut_candidate is not None:
+            if candidate.get(value_type, 0) <= cut_candidate.get(value_type, 0):
+                continue
+        viable.append(v)
+
+    if not viable:
+        return None, None, None
+
+    # Find positional needs
+    backup_needs = league_context.get("backup_needs", {})
+    num_teams = league_context.get("num_teams", 12)
+    
+    flex_slots = {
+        "FLEX": {"RB", "WR", "TE"},
+        "SUPER_FLEX": {"QB", "RB", "WR", "TE"},
+        "WRRB_FLEX": {"RB", "WR"},
+        "REC_FLEX": {"WR", "TE"},
+    }
+
+    # Use redraft replacement levels to determine if a player counts toward active roster need
+    redraft_replacement = calculate_redraft_replacement(league_context, all_players)
 
     if DEV_MODE:
-        print(f"total_active_players: {total_active_players}, total_active_capacity: {total_active_capacity}")
-        print(f"taxi mode: {total_active_players >= total_active_capacity}")
-    if total_active_players < total_active_capacity:
-        # Active roster not full yet - recommend best positive VORP regardless of age
-        positive_vorp = [v for v in vorp_players if v["vorp"] > 0]
-    else:
-        # Active roster full - taxi territory only
-        positive_vorp = [
-            v for v in vorp_players
-            if v["vorp"] > 0 and (
-                v["player"].get("years_exp", 99) == 0 or taxi_allow_vets == 1
-            )
-        ]
+        print(f"redraft_replacement: {redraft_replacement}")
 
-    if positive_vorp:
-        best = max(positive_vorp, key=lambda x: x["vorp"])
-        return None, best["player"], 0
-    if vorp_players:
-        best = max(vorp_players, key=lambda x: x["vorp"])
-        return None, best["player"], 0
-    return None, None, None
+    # Only count players above redraft replacement level toward positional need
+    picks_by_pos = {}
+    for pid, p in sim_active.items():
+        pos = p.get("position", "?")
+        redraft_val = p.get("redraft_value", 0)
+        rep = redraft_replacement.get(pos, 0)
+        if redraft_val >= rep:
+            picks_by_pos[pos] = picks_by_pos.get(pos, 0) + 1
+
+    if DEV_MODE:
+        print(f"picks_by_pos (above redraft replacement): {picks_by_pos}")
+
+    dedicated = {
+        "QB": sum(1 for s in roster_positions if s in ["QB", "SUPER_FLEX"]),
+        "RB": sum(1 for s in roster_positions if s in ["RB", "FLEX", "WRRB_FLEX"]),
+        "WR": sum(1 for s in roster_positions if s in ["WR", "FLEX", "REC_FLEX", "WRRB_FLEX"]),
+        "TE": sum(1 for s in roster_positions if s in ["TE", "FLEX", "REC_FLEX"]),
+    }
+
+    # Positions still needing players (starters + backups not yet filled)
+    needed_positions = [
+        pos for pos in ["QB", "RB", "WR", "TE"]
+        if picks_by_pos.get(pos, 0) < dedicated.get(pos, 0) + backup_needs.get(pos, 0)
+    ]
+
+    # Best viable player at a needed position
+    best_needed = next(
+        (v for v in viable if v["position"] in needed_positions),
+        None
+    )
+
+    # Best viable player overall
+    best_overall = viable[0]
+
+    if best_needed is None:
+        # All positions covered, return best overall
+        return None, best_overall["player"], 0
+
+    gap = best_overall["vorp"] - best_needed["vorp"]
+
+    if gap > threshold and best_overall["position"] not in needed_positions:
+        return best_overall["player"], best_needed["player"], gap
+
+    return None, best_needed["player"], gap
 
 def calculate_confidence(recommendation_name, available, alternatives, is_dynasty=True):
     if is_dynasty:
