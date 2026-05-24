@@ -18,6 +18,12 @@
 - **Balanced:** Enforces positional limits and roster balance. Ensures starters at every position before taking backups or developmental players.
 - Each mode would adjust BPA threshold, positional cap enforcement, and Claude's reasoning priorities.
 
+## Draft Strategy Setting
+- User-configurable draft strategy: "Pure VORP" (always take highest VORP) vs "Position Balanced" (enforce positional limits more strictly, for leagues that don't trade much)
+- Pure VORP: current BPA behavior, threshold-based overrides
+- Position Balanced: higher BPA threshold or hard caps at dedicated + backup counts per position
+- Could also expose BPA_THRESHOLD_DYNASTY as a user-facing slider in settings
+
 ## Dual Recommendation Display
 - Show two picks side by side: "Best Value" (highest VORP regardless of position) and "Balance Pick" (best VORP at most needed position)
 - Claude explains the tradeoff between the two options

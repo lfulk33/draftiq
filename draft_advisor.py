@@ -709,7 +709,12 @@ def calculate_bpa(available, league_context, all_players=None):
         pos for pos in ["QB", "RB", "WR", "TE"]
         if picks_by_pos.get(pos, 0) < dedicated.get(pos, 0) + backup_needs.get(pos, 0)
     ]
-
+    if DEV_MODE:
+        print(f"needed_positions: {needed_positions}")
+        print(f"dedicated: {dedicated}")
+        print(f"backup_needs: {backup_needs}")
+        for pos in ['QB', 'RB', 'WR', 'TE']:
+            print(f"{pos}: picks={picks_by_pos.get(pos,0)}, need={dedicated.get(pos,0) + backup_needs.get(pos,0)}")
     # Best viable player at a needed position
     best_needed = next(
         (v for v in viable if v["position"] in needed_positions),
