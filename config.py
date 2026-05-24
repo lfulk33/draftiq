@@ -11,5 +11,9 @@ DEV_MODE = os.getenv("DEV_MODE", "false").lower() == "true"
 # Best player available thresholds
 # If top available player's value exceeds best available at needed position by this amount,
 # recommend best player regardless of positional need
-BPA_THRESHOLD_DYNASTY = 20
+BPA_THRESHOLD_DYNASTY = 30
 BPA_THRESHOLD_REDRAFT = 800
+TAXI_THRESHOLD_QB = 1000
+TAXI_THRESHOLD_RB = 100
+TAXI_THRESHOLD_WR = 100
+TAXI_THRESHOLD_TE = 100

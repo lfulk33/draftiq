@@ -12,6 +12,13 @@
 - Claude should use redraft value as primary signal for taxi vs active bench decisions
 - Add dynasty/redraft toggle to roster panel display
 
+## Better Redraft Data Coverage
+- FantasyCalc only covers 199 players for redraft rankings
+- Veterans like Darius Slayton, MarShawn Lloyd etc. show fc_redraft_value=None even though they have real 2026 value
+- This causes the system to prefer low-dynasty rookies over legitimate veteran backups in late rounds
+- Fix: integrate a supplementary redraft data source (FantasyPros, ESPN ADP, etc.) to cover players FantasyCalc misses
+- Alternatively: when 2026 projections become available (August/September), use Sleeper projected points as redraft signal
+
 ## Draft Strategy Modes
 - **Full Dynasty:** Pure VORP/value-based drafting, accumulate assets and trade for needs. Prioritizes long-term upside over immediate roster balance.
 - **Win Now:** Prioritizes redraft value and immediate contributors. Less developmental stashing, more proven veterans.
@@ -23,6 +30,12 @@
 - Pure VORP: current BPA behavior, threshold-based overrides
 - Position Balanced: higher BPA threshold or hard caps at dedicated + backup counts per position
 - Could also expose BPA_THRESHOLD_DYNASTY as a user-facing slider in settings
+
+## Draft Strategy Slider
+- User-facing slider in UI: "Position Need" ←→ "Pure VORP"
+- Maps to BPA_THRESHOLD_DYNASTY: Position Need = 60, Balanced = 30, Pure VORP = 5
+- Separate slider for redraft: BPA_THRESHOLD_REDRAFT
+- Could also be per-session setting shown in sidebar during draft
 
 ## Dual Recommendation Display
 - Show two picks side by side: "Best Value" (highest VORP regardless of position) and "Balance Pick" (best VORP at most needed position)
