@@ -2,12 +2,27 @@ import json
 import math
 from llm_client import get_completion
 from config import DEV_MODE
-from config import TAXI_THRESHOLD_QB, TAXI_THRESHOLD_RB, TAXI_THRESHOLD_WR, TAXI_THRESHOLD_TE
+from config import TAXI_THRESHOLD_QB, TAXI_THRESHOLD_RB, TAXI_THRESHOLD_WR, TAXI_THRESHOLD_TE, REDRAFT_THRESHOLD_QB, REDRAFT_THRESHOLD_RB, REDRAFT_THRESHOLD_WR, REDRAFT_THRESHOLD_TE
 
-SYSTEM_PROMPT = """You are an expert dynasty fantasy football draft assistant. 
-You reason about long-term player value, age curves, and positional scarcity.
-You give concise, confident recommendations with clear reasoning.
+def get_system_prompt(is_dynasty=True):
+    if is_dynasty:
+        return """You are an expert dynasty fantasy football analyst and draft advisor for the 2026 NFL season.
+You give vivid, specific, confident recommendations that sound like advice from a knowledgeable friend who watches film and follows the league closely.
+Focus on long-term player value, age curves, positional scarcity, and dynasty upside.
+Use the team, team_qb1, depth_chart_order, and other teammate fields provided to mention specific offensive context, target share, and role clarity.
+Write like a dynasty analyst on a podcast — specific, enthusiastic, and grounded in real situation awareness.
+Prioritize age, long-term value, and development potential. Taxi squad eligibility matters.
+Do not make up information not provided. If team_qb1 is provided use it. If depth_chart_order is 1, say they are the starter.
 Always base your recommendations on the actual league settings provided, including roster construction and scoring format.
+Always respond in valid JSON only. No preamble, no markdown, no explanation outside the JSON."""
+    else:
+        return """You are an expert redraft fantasy football analyst and draft advisor for the 2026 NFL season.
+You give vivid, specific, confident recommendations that sound like advice from a knowledgeable friend who watches film and follows the league closely.
+Focus on current season production, role, opportunity, and offensive context.
+Use the team and team_qb1 fields provided to mention specific teammates, offensive schemes, and target share context.
+Write like a fantasy analyst on a podcast — specific, enthusiastic, and grounded in real situation.
+Ignore dynasty value and long-term upside — every comment should be about winning your league THIS season.
+Do not make up information not provided. If team_qb1 is provided use it. If depth_chart_order is 1, say they are the starter.
 Always respond in valid JSON only. No preamble, no markdown, no explanation outside the JSON."""
 
 def get_flex_eligible(slot_name):
@@ -248,6 +263,26 @@ def build_prompt(picks, available, my_roster, league_context, pick_number, all_p
         "WR": TAXI_THRESHOLD_WR,
         "TE": TAXI_THRESHOLD_TE,
     }
+    # Build team context lookup
+    team_qb1 = {}
+    team_rb1 = {}
+    team_wr1 = {}
+    team_te1 = {}
+    if all_players:
+        for p in all_players.values():
+            team = p.get("team", "")
+            pos = p.get("position", "")
+            order = p.get("depth_chart_order")
+            if not team or order != 1:
+                continue
+            if pos == "QB":
+                team_qb1[team] = p.get("full_name")
+            elif pos == "RB":
+                team_rb1[team] = p.get("full_name")
+            elif pos == "WR":
+                team_wr1[team] = p.get("full_name")
+            elif pos == "TE":
+                team_te1[team] = p.get("full_name")
     if league_context.get("is_dynasty"):
         top_available = sorted(
             [p for p in available.values() if "fc_overall_rank" in p],
@@ -262,9 +297,12 @@ def build_prompt(picks, available, my_roster, league_context, pick_number, all_p
 
     available_summary = []
     for p in top_available:
-        available_summary.append({
+        team = p.get("team", "")
+        entry = {
             "name": p.get("full_name"),
             "position": p.get("position"),
+            "team": team,
+            "depth_chart_order": p.get("depth_chart_order"),
             "age": p.get("fc_age"),
             "dynasty_value": p.get("fc_value"),
             "redraft_value": p.get("fc_redraft_value"),
@@ -272,18 +310,35 @@ def build_prompt(picks, available, my_roster, league_context, pick_number, all_p
             "position_rank": p.get("fc_position_rank"),
             "tier": p.get("fc_tier"),
             "trend_30_day": p.get("fc_trend")
-        })
+        }
+        if team:
+            if team in team_qb1:
+                entry["team_qb1"] = team_qb1[team]
+            if team in team_rb1 and p.get("position") != "RB":
+                entry["team_rb1"] = team_rb1[team]
+            if team in team_wr1 and p.get("position") != "WR":
+                entry["team_wr1"] = team_wr1[team]
+            if team in team_te1 and p.get("position") != "TE":
+                entry["team_te1"] = team_te1[team]
+        available_summary.append(entry)
 
+    # Build team QB1 lookup for context
+    team_qb1 = {}
+    if all_players:
+        for p in all_players.values():
+            if p.get("position") == "QB" and p.get("depth_chart_order") == 1 and p.get("team"):
+                team_qb1[p.get("team")] = p.get("full_name")
     my_players = list(league_context.get("my_existing_roster", []))
 
     roster_positions = league_context.get("roster_positions", [])
     te_slots = sum(1 for p in roster_positions if p == "TE")
     qb_slots = sum(1 for p in roster_positions if p in ["QB", "SUPER_FLEX"])
+    is_dynasty = league_context.get("is_dynasty", True)
     taxi_total = league_context.get("taxi_slots_total", 0) or 0
     taxi_picks = sum(1 for p in league_context.get("my_picks_this_draft", []) + league_context.get("my_existing_roster", [])
                     if (p.get("redraft_value", 0) or 0) < taxi_thresholds.get(p.get("position", "?"), 100)
                     and (p.get("years_exp", 99) == 0 or league_context.get("taxi_allow_vets", 0) == 1))
-    taxi_open = max(0, taxi_total - taxi_picks)
+    taxi_open = max(0, taxi_total - taxi_picks) if is_dynasty else 0
     picks_remaining = league_context.get("picks_remaining_for_me", 0)
     bpa_player, suggested_pick, bpa_gap = calculate_bpa(available, league_context, all_players)
     if DEV_MODE:
@@ -313,6 +368,7 @@ LEAGUE CONTEXT:
 {json.dumps(league_context, indent=2)}
 
 LEAGUE FORMAT: {"Dynasty" if league_context.get("is_dynasty") else "Redraft"}
+SEASON: 2026
 
 {"Dynasty notes: Prioritize age, long-term value, and development potential. Taxi squad eligibility matters." if league_context.get("is_dynasty") else "Redraft notes: Prioritize immediate production and current season value. Ignore long-term dynasty upside."}
 
@@ -335,9 +391,9 @@ IMPORTANT ROSTER CONSTRUCTION NOTES:
 - This league has {qb_slots} QB-eligible slots including SUPER_FLEX. QB is elevated in value.
 - Only recommend a TE if they are clearly the best available player by a significant margin.
 - Prioritize QB, RB, and WR unless a TE represents exceptional value.
-- You have {taxi_open} open taxi squad slots. Developmental rookies can be stashed there for up to {league_context.get("taxi_years")} years.
 - You have {picks_remaining} picks remaining in this draft including this one.
-- {"Taxi space is available so developmental stashes are viable." if taxi_open > 0 else "Taxi is full. Only draft players ready to contribute soon."}
+{f"- You have {taxi_open} open taxi squad slots. Developmental rookies can be stashed there for up to {league_context.get('taxi_years')} years." if is_dynasty else "- This is a REDRAFT league. Every player must contribute this season. Do not consider dynasty value or long-term upside."}
+{f"- {'Taxi space is available so developmental stashes are viable.' if taxi_open > 0 else 'Taxi is full. Only draft players ready to contribute soon.'}" if is_dynasty else ""}
 ROSTER CONSTRUCTION DETAIL:
 {json.dumps({
     pos: f"{d['dedicated_slots']} dedicated {pos} slot(s) + {d['flex_eligible']} flex slot(s) eligible for {pos}"
@@ -375,7 +431,8 @@ Respond with this exact JSON structure:
 
 def get_recommendation(picks, available, my_roster, league_context, pick_number, all_players=None):
     prompt = build_prompt(picks, available, my_roster, league_context, pick_number, all_players)
-    response = get_completion(prompt, system=SYSTEM_PROMPT)
+    is_dynasty = league_context.get("is_dynasty", True)
+    response = get_completion(prompt, system=get_system_prompt(is_dynasty))
     try:
         rec = json.loads(response)
     except json.JSONDecodeError:
@@ -709,6 +766,45 @@ def calculate_bpa(available, league_context, all_players=None):
             return None, best["player"], 0
         return None, None, None
 
+    is_dynasty = league_context.get("is_dynasty", True)
+    if not is_dynasty:
+        # Redraft mode - no taxi, just positional need and BPA
+        backup_needs = league_context.get("backup_needs", {})
+        redraft_thresholds = {
+            "QB": REDRAFT_THRESHOLD_QB,
+            "RB": REDRAFT_THRESHOLD_RB,
+            "WR": REDRAFT_THRESHOLD_WR,
+            "TE": REDRAFT_THRESHOLD_TE,
+        }
+        picks_by_pos = {}
+        for pid, p in sim_active.items():
+            pos = p.get("position", "?")
+            redraft_val = p.get("redraft_value", 0) or 0
+            if redraft_val >= redraft_thresholds.get(pos, 500):
+                picks_by_pos[pos] = picks_by_pos.get(pos, 0) + 1
+        dedicated = {
+            "QB": sum(1 for s in roster_positions if s in ["QB", "SUPER_FLEX"]),
+            "RB": sum(1 for s in roster_positions if s in ["RB", "FLEX", "WRRB_FLEX"]),
+            "WR": sum(1 for s in roster_positions if s in ["WR", "FLEX", "REC_FLEX", "WRRB_FLEX"]),
+            "TE": sum(1 for s in roster_positions if s in ["TE", "FLEX", "REC_FLEX"]),
+        }
+        needed_positions = [
+            pos for pos in ["QB", "RB", "WR", "TE"]
+            if picks_by_pos.get(pos, 0) < dedicated.get(pos, 0) + backup_needs.get(pos, 0)
+        ]
+        best_needed = next(
+            (v for v in viable if v["position"] in needed_positions),
+            None
+        )
+        best_overall = viable[0] if viable else None
+        if not best_overall:
+            return None, None, None
+        if best_needed is None:
+            return None, best_overall["player"], 0
+        gap = best_overall["vorp"] - best_needed["vorp"]
+        if gap > threshold and best_overall["position"] not in needed_positions:
+            return best_overall["player"], best_needed["player"], gap
+        return None, best_needed["player"], gap
     taxi_full = len(sim_taxi) >= taxi_slots_total
 
     # Find positional needs - only count players with real redraft value
