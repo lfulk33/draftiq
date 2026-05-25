@@ -388,6 +388,7 @@ IMPORTANT ROSTER CONSTRUCTION NOTES:
 - You have {picks_remaining} picks remaining in this draft including this one.
 {f"- You have {taxi_open} open taxi squad slots. Developmental rookies can be stashed there for up to {league_context.get('taxi_years')} years." if is_dynasty else "- This is a REDRAFT league. Every player must contribute this season. Do not consider dynasty value or long-term upside."}
 {f"- {'Taxi space is available so developmental stashes are viable.' if taxi_open > 0 else 'Taxi is full. Only draft players ready to contribute soon.'}" if is_dynasty else ""}
+{"- K and DST should be drafted in the final rounds based on schedule matchups. Do not recommend K or DST until all skill position needs are filled." if not is_dynasty else ""}
 ROSTER CONSTRUCTION DETAIL:
 {json.dumps({
     pos: f"{d['dedicated_slots']} dedicated {pos} slot(s) + {d['flex_eligible']} flex slot(s) eligible for {pos}"
@@ -607,6 +608,8 @@ def simulate_placement(candidate, sim_active, sim_taxi, league_context):
             return "TAXI", None
         elif taxi_eligible and len(sim_taxi) >= taxi_slots_total:
             # Taxi full during draft - can still add if better dynasty value than worst taxi player
+            if not sim_taxi:
+                return "CUT", None
             lowest_taxi = min(sim_taxi.values(), key=lambda x: x.get("dynasty_value", 0))
             if candidate.get("dynasty_value", 0) > lowest_taxi.get("dynasty_value", 0):
                 return "TAXI", None  # no cut during draft, just note taxi is over capacity
@@ -724,7 +727,11 @@ def calculate_bpa(available, league_context, all_players=None):
         print(f"sim_taxi players: {[(p.get('name'), p.get('redraft_value')) for p in sim_taxi.values()]}")
         print(f"sim_active QBs: {[(p.get('name'), p.get('redraft_value')) for p in sim_active.values() if p.get('position') == 'QB']}")
     # Sort vorp_players by vorp descending
-    sorted_vorp = sorted(vorp_players, key=lambda x: x["vorp"], reverse=True)
+    sorted_vorp = sorted(
+        [v for v in vorp_players if v["position"] not in ["K", "DEF"]],
+        key=lambda x: x["vorp"],
+        reverse=True
+    )
 
     # Filter out players who would be CUT with no room
     viable = []

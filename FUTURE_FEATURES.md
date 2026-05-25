@@ -54,6 +54,11 @@
 - Post-draft grade: how did Claude's recommendations compare to actual results
 - Trade value suggestions based on roster construction after draft
 
+## Current NFL News Integration  
+- FantasyCalc values can lag real-world situations (injuries, trades, depth chart changes)
+- Stroud example: FC shows R:2615 but if he's healthy starter in 2026 he's worth much more
+- Consider integrating current news feed or injury reports to flag potentially mispriced players
+
 ## Model Settings
 - User-selectable LLM model (Claude, GPT-4, Gemini)
 - Bring your own API key support for freemium tier
