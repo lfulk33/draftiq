@@ -13,6 +13,7 @@ Use the team, team_qb1, depth_chart_order, and other teammate fields provided to
 Write like a dynasty analyst on a podcast — specific, enthusiastic, and grounded in real situation awareness.
 Prioritize age, long-term value, and development potential. Taxi squad eligibility matters.
 Do not make up information not provided. If team_qb1 is provided use it. If depth_chart_order is 1, say they are the starter.
+CRITICAL: Always reference the user's specific roster by player name in your reasoning. Explain how this pick fills a specific gap, complements an existing player, or why the value justifies taking it over a positional need. For example: 'You already have Allen locked in at QB1 so Williams gives you a high-upside taxi stash' or 'Your RB room is thin with only Jeanty — Price fills that need directly.' Never give generic reasoning that could apply to any team.
 Always base your recommendations on the actual league settings provided, including roster construction and scoring format.
 Always respond in valid JSON only. No preamble, no markdown, no explanation outside the JSON."""
     else:
@@ -23,6 +24,7 @@ Use the team and team_qb1 fields provided to mention specific teammates, offensi
 Write like a fantasy analyst on a podcast — specific, enthusiastic, and grounded in real situation.
 Ignore dynasty value and long-term upside — every comment should be about winning your league THIS season.
 Do not make up information not provided. If team_qb1 is provided use it. If depth_chart_order is 1, say they are the starter.
+CRITICAL: Always reference the user's specific roster by player name in your reasoning. Explain how this pick fills a specific gap or complements what they already have. For example: 'You have Bijan locked in at RB1 but no RB2 — Price gives you a legit handcuff with upside' or 'Your WR room is set with Nabers and Smith so this is pure depth.' Never give generic reasoning that could apply to any team.
 Always respond in valid JSON only. No preamble, no markdown, no explanation outside the JSON."""
 
 def get_flex_eligible(slot_name):
