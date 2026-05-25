@@ -1,13 +1,17 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
   <title>Draft Assistant</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link
+    href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=DM+Sans:wght@300;400;500&display=swap"
+    rel="stylesheet">
   <link rel="stylesheet" href="/static/css/app.css">
 </head>
+
 <body>
 
   <!-- SETUP SCREEN -->
@@ -20,7 +24,8 @@
       <div class="setup-form">
         <div class="field">
           <label class="field-label">Sleeper Username</label>
-          <input type="text" id="input-username" class="field-input" placeholder="your username" autocomplete="off" autocapitalize="off">
+          <input type="text" id="input-username" class="field-input" placeholder="your username" autocomplete="off"
+            autocapitalize="off">
         </div>
         <button id="btn-load-leagues" class="btn-primary">Load Leagues</button>
         <div id="setup-error" class="error-msg hidden"></div>
@@ -73,6 +78,7 @@
         <p>Tap the button below to get your recommendation.</p>
       </div>
       <div id="rec-content" class="hidden">
+        <div id="rec-prompt" class="rec-prompt">Tap Get Recommendation for your next pick.</div>
         <div class="rec-label">Recommended Pick</div>
         <div class="rec-player" id="rec-player"></div>
         <div class="rec-meta" id="rec-meta"></div>
@@ -84,23 +90,28 @@
         </div>
         <div class="rec-reasoning" id="rec-reasoning"></div>
 
-        <!-- Tabs -->
-        <div class="tabs">
-          <button class="tab active" data-tab="alternatives">Alternatives</button>
-          <button class="tab" data-tab="roster">Roster</button>
-          <button class="tab" data-tab="notes">Notes</button>
-        </div>
+        <div class="rec-card-inner">
+          <!-- Tabs (mobile only) -->
+          <div class="tabs">
+            <button class="tab active" data-tab="alternatives">Alternatives</button>
+            <button class="tab" data-tab="roster">Roster</button>
+            <button class="tab" data-tab="notes">Notes</button>
+          </div>
 
-        <div id="tab-alternatives" class="tab-content active">
-          <div id="alts-list" class="alts-list"></div>
-        </div>
+          <div id="tab-alternatives" class="tab-content active">
+            <div class="col-header">Also Consider</div>
+            <div id="alts-list" class="alts-list"></div>
+          </div>
 
-        <div id="tab-roster" class="tab-content hidden">
-          <div id="roster-content"></div>
-        </div>
+          <div id="tab-roster" class="tab-content hidden">
+            <div class="col-header">Your Roster</div>
+            <div id="roster-content"></div>
+          </div>
 
-        <div id="tab-notes" class="tab-content hidden">
-          <div id="notes-content"></div>
+          <div id="tab-notes" class="tab-content hidden">
+            <div class="col-header">Scouting Notes</div>
+            <div id="notes-content"></div>
+          </div>
         </div>
       </div>
     </div>
@@ -118,4 +129,5 @@
 
   <script src="/static/js/app.js"></script>
 </body>
+
 </html>

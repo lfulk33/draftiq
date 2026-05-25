@@ -11,7 +11,7 @@ CORS(app)
 
 # Load players once at startup
 with open("fantasy_players.json") as f:
-    PLAYERS = json.load(f)
+    PLAYERS = {str(k): v for k, v in json.load(f).items()}
 
 from config import (
     SLEEPER_USERNAME, BPA_THRESHOLD_DYNASTY, BPA_THRESHOLD_REDRAFT,
@@ -115,6 +115,10 @@ def build_league_context(league_detail, draft_detail, my_roster, picks,
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
+
+@app.route("/api/default-username")
+def api_default_username():
+    return jsonify({"username": SLEEPER_USERNAME or ""})
 
 @app.route("/")
 def index():
@@ -282,5 +286,5 @@ def api_recommend():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(debug=os.environ.get("FLASK_DEBUG", "false").lower() == "true",
+    app.run(debug=True,
             host="0.0.0.0", port=port)

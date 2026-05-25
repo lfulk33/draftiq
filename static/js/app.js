@@ -122,7 +122,12 @@ $('btn-change-league').addEventListener('click', () => {
 $('btn-recommend').addEventListener('click', getRecommendation);
 
 $('btn-refresh').addEventListener('click', async () => {
+  const btn = $('btn-refresh');
+  btn.disabled = true;
+  btn.textContent = '...';
   await loadDraft();
+  btn.textContent = '↺';
+  btn.disabled = false;
 });
 
 // Tabs
@@ -130,9 +135,14 @@ document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', () => {
     const tabName = tab.dataset.tab;
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => {
+      c.classList.remove('active');
+      c.classList.add('hidden');
+    });
     tab.classList.add('active');
-    document.getElementById(`tab-${tabName}`).classList.add('active');
+    const target = document.getElementById(`tab-${tabName}`);
+    target.classList.remove('hidden');
+    target.classList.add('active');
   });
 });
 
@@ -169,13 +179,28 @@ function renderDraftState(data) {
 
   // Picks feed — descending order (most recent first)
   renderPicksFeed(picks, current_pick, league_context.num_teams || 12);
+
+  // Always render roster and notes so columns are populated before recommendation
+  renderRoster();
+  if (!state.recommendation) {
+    renderAlternatives([]);
+    renderNotes({});
+    hide('rec-empty');
+    show('rec-content');
+    show('rec-prompt');
+    document.querySelector('.rec-label').style.visibility = 'hidden';
+    $('rec-player').style.visibility = 'hidden';
+    $('rec-meta').style.visibility = 'hidden';
+    document.querySelector('.rec-conf').style.visibility = 'hidden';
+    $('rec-reasoning').style.visibility = 'hidden';
+  }
 }
 
 function renderPicksFeed(picks, currentPick, numTeams) {
   const feed = $('picks-feed');
   feed.innerHTML = '';
 
-  // Add "on clock" card first
+  // On-clock card first
   const clockRound = Math.ceil(currentPick / numTeams);
   const clockSlot = currentPick - (clockRound - 1) * numTeams;
   const clockCard = document.createElement('div');
@@ -185,9 +210,19 @@ function renderPicksFeed(picks, currentPick, numTeams) {
     <div class="pick-name empty">Your pick</div>
     <div class="pick-pos"></div>
   `;
+  // Arrow pointing right, to the left of on-clock card
+  const arrowEl = document.createElement('div');
+  arrowEl.className = 'pick-arrow-indicator';
+  arrowEl.innerHTML = `
+    <svg width="80" height="48" viewBox="0 0 80 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <line x1="10" y1="24" x2="70" y2="24" stroke="#8b3a0f" stroke-width="5" stroke-linecap="round"/>
+      <polyline points="50,8 70,24 50,40" stroke="#8b3a0f" stroke-width="5" fill="none" stroke-linejoin="round" stroke-linecap="round"/>
+    </svg>
+  `;
+  feed.appendChild(arrowEl);
   feed.appendChild(clockCard);
 
-  // Picks in reverse order (most recent first)
+  // Picks in reverse chronological order (most recent first)
   const reversed = [...picks].reverse();
   reversed.forEach(pick => {
     const card = document.createElement('div');
@@ -196,15 +231,21 @@ function renderPicksFeed(picks, currentPick, numTeams) {
 
     const round = pick.round || Math.ceil(pick.pick_no / numTeams);
     const slot = pick.round_slot || (pick.pick_no - (round - 1) * numTeams);
-    const name = pick.player_name
-      ? (pick.player_name.split(' ').length > 1
-          ? pick.player_name.split(' ').slice(-1)[0]
-          : pick.player_name)
-      : '—';
+    let nameHtml = '—';
+    if (pick.player_name) {
+      const parts = pick.player_name.split(' ');
+      if (parts.length > 1) {
+        const first = parts.slice(0, -1).join(' ');
+        const last = parts.slice(-1)[0];
+        nameHtml = `<span class="pick-first">${first}</span><span class="pick-last">${last.toUpperCase()}</span>`;
+      } else {
+        nameHtml = `<span class="pick-last">${pick.player_name.toUpperCase()}</span>`;
+      }
+    }
 
     card.innerHTML = `
       <div class="pick-num">${formatPickNum(round, slot)}</div>
-      <div class="pick-name">${name}</div>
+      <div class="pick-name">${nameHtml}</div>
       <div class="pick-pos">
         ${pick.position ? `<span class="pick-pos-badge">${pick.position}</span>` : ''}
         ${pick.team || ''}
@@ -218,7 +259,6 @@ async function getRecommendation() {
   const { selectedDraftId, selectedLeague, userId } = state;
   if (!selectedDraftId) return;
 
-  // Loading state
   $('btn-recommend').disabled = true;
   $('btn-recommend-text').textContent = 'Thinking...';
   show('btn-recommend-spinner');
@@ -227,7 +267,6 @@ async function getRecommendation() {
   hide('rec-content');
 
   try {
-    // Refresh draft first
     await loadDraft();
 
     const res = await fetch('/api/recommend', {
@@ -256,7 +295,6 @@ async function getRecommendation() {
 }
 
 function renderRecommendation(rec) {
-  // Player name + meta
   $('rec-player').textContent = rec.recommendation || '—';
 
   const metaEl = $('rec-meta');
@@ -268,7 +306,6 @@ function renderRecommendation(rec) {
     metaEl.appendChild(badge);
   }
 
-  // Find player team from draft data
   const draftData = state.draftData;
   if (draftData) {
     const playerInfo = getPlayerTeamFromAvailable(rec.recommendation, draftData);
@@ -280,37 +317,36 @@ function renderRecommendation(rec) {
     }
   }
 
-  // Confidence
   const tier = rec.confidence_tier || 'low';
   const gap = rec.confidence_gap || 0;
   $('conf-fill').style.width = confidenceWidth(tier);
   $('conf-label').textContent = confidenceText(tier, gap);
 
-  // Reasoning
   $('rec-reasoning').textContent = rec.reasoning || '';
-
-  // Alternatives tab
+  hide('rec-prompt');
+  document.querySelector('.rec-label').style.visibility = 'visible';
+  $('rec-player').style.visibility = 'visible';
+  $('rec-meta').style.visibility = 'visible';
+  document.querySelector('.rec-conf').style.visibility = 'visible';
+  $('rec-reasoning').style.visibility = 'visible';
   renderAlternatives(rec.alternatives || []);
-
-  // Roster tab
   renderRoster();
-
-  // Notes tab
   renderNotes(rec);
 
   show('rec-content');
 
-  // Activate alternatives tab by default
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(c => {
+    c.classList.remove('active');
+    c.classList.add('hidden');
+  });
   document.querySelector('[data-tab="alternatives"]').classList.add('active');
+  $('tab-alternatives').classList.remove('hidden');
   $('tab-alternatives').classList.add('active');
 }
 
 function getPlayerTeamFromAvailable(name, draftData) {
-  // Look up from league context my_picks or existing roster
-  // Fall back to a simple team lookup if available
-  return null; // Will enhance with player data later
+  return state.recommendation?.team || null;
 }
 
 function renderAlternatives(alts) {
@@ -318,7 +354,7 @@ function renderAlternatives(alts) {
   list.innerHTML = '';
 
   if (!alts.length) {
-    list.innerHTML = '<p style="color:#aaa;font-size:13px;padding:8px 0">No alternatives available.</p>';
+    list.innerHTML = '<p class="alts-empty">Tap Get Recommendation to see suggestions for this pick.</p>';
     return;
   }
 
@@ -329,6 +365,7 @@ function renderAlternatives(alts) {
       <div class="alt-top">
         <span class="alt-name">${alt.name}</span>
         ${alt.position ? `<span class="alt-pos">${alt.position}</span>` : ''}
+        ${alt.team ? `<span class="alt-team">${alt.team}</span>` : ''}
       </div>
       <div class="alt-reason">${alt.reason || ''}</div>
     `;
@@ -371,15 +408,10 @@ function renderRoster() {
       const isStarter = lc.my_starters?.some(s => s.name === p.name);
       const row = document.createElement('div');
       row.className = 'roster-player-row';
-      const isDynasty = lc.is_dynasty;
-      const valStr = isDynasty
-        ? `D:${p.dynasty_value || 0}`
-        : `R:${p.redraft_value || 0}`;
       row.innerHTML = `
         <div class="roster-player-name ${isStarter ? 'starter' : ''}">
           ${isStarter ? '<span class="starter-dot"></span>' : ''}${p.name}
         </div>
-        <div class="roster-player-vals">${valStr}</div>
       `;
       group.appendChild(row);
     });
@@ -392,7 +424,6 @@ function renderNotes(rec) {
   const content = $('notes-content');
   content.innerHTML = '';
 
-  // Positional note
   if (rec.positional_note) {
     const item = document.createElement('div');
     item.className = 'note-item';
@@ -403,7 +434,6 @@ function renderNotes(rec) {
     content.appendChild(item);
   }
 
-  // Upside
   if (rec.upside) {
     const item = document.createElement('div');
     item.className = 'note-item';
@@ -414,7 +444,6 @@ function renderNotes(rec) {
     content.appendChild(item);
   }
 
-  // Roster needs
   const lc = state.draftData?.league_context;
   if (lc) {
     const needsItem = document.createElement('div');
@@ -456,15 +485,23 @@ function startPolling() {
     if (state.draftData) {
       const prevPick = state.draftData.current_pick;
       await loadDraft();
-      // If pick advanced, clear recommendation
       if (state.draftData.current_pick !== prevPick) {
         state.recommendation = null;
-        hide('rec-content');
-        show('rec-empty');
-        $('rec-empty').textContent = 'New pick detected. Tap Get Recommendation.';
+        renderRoster();
+        renderNotes({});
+        renderAlternatives([]);
+        hide('rec-empty');
+        show('rec-content');
+        show('rec-prompt');
+        $('rec-prompt').textContent = 'New pick detected. Tap Get Recommendation.';
+        document.querySelector('.rec-label').style.visibility = 'hidden';
+        $('rec-player').style.visibility = 'hidden';
+        $('rec-meta').style.visibility = 'hidden';
+        document.querySelector('.rec-conf').style.visibility = 'hidden';
+        $('rec-reasoning').style.visibility = 'hidden';
       }
     }
-  }, 15000); // poll every 15 seconds
+  }, 5000);
 }
 
 function stopPolling() {
@@ -475,10 +512,14 @@ function stopPolling() {
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
-// Pre-fill username if known
 const savedUsername = localStorage.getItem('da_username');
 if (savedUsername) {
   $('input-username').value = savedUsername;
+} else {
+  fetch('/api/default-username')
+    .then(r => r.json())
+    .then(d => { if (d.username) $('input-username').value = d.username; })
+    .catch(() => { });
 }
 
 $('btn-load-leagues').addEventListener('click', () => {

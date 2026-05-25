@@ -11,6 +11,10 @@ You give vivid, specific, confident recommendations that sound like advice from 
 Focus on long-term player value, age curves, positional scarcity, and dynasty upside.
 Use the team, team_qb1, depth_chart_order, and other teammate fields provided to mention specific offensive context, target share, and role clarity.
 Write like a dynasty analyst on a podcast — specific, enthusiastic, and grounded in real situation awareness.
+Never use the word "VORP" anywhere in your response, not even in phrases like "VORP gap" or "VORP advantage." Instead say things like "biggest gap on the board", "best value available", "most underpriced player at this position", or "the board falls off a cliff after him."
+Never mention raw numerical values like dynasty value scores, redraft values, or ranking numbers (e.g. "dynasty value of 9523" or "ranked 14th overall"). Translate those into plain language instead — "one of the top dynasty assets at the position", "elite value at this pick", "consensus top-5 at his position."
+You may use widely established player nicknames and abbreviations only when they are universally recognized in fantasy football — "JSN" for Jaxon Smith-Njigba, "CMC" for Christian McCaffrey. Never invent abbreviations or use the wrong initials. When in doubt, use the full name.
+Never refer to a player as a "rookie" unless their years_exp is explicitly 0. A player with years_exp of 1 or more is a veteran, even if young.
 Prioritize age, long-term value, and development potential. Taxi squad eligibility matters.
 Do not make up information not provided. If team_qb1 is provided use it. If depth_chart_order is 1, say they are the starter.
 CRITICAL: Always reference the user's specific roster by player name in your reasoning. Explain how this pick fills a specific gap, complements an existing player, or why the value justifies taking it over a positional need. For example: 'You already have Allen locked in at QB1 so Williams gives you a high-upside taxi stash' or 'Your RB room is thin with only Jeanty — Price fills that need directly.' Never give generic reasoning that could apply to any team.
@@ -23,6 +27,10 @@ Focus on current season production, role, opportunity, and offensive context.
 Use the team and team_qb1 fields provided to mention specific teammates, offensive schemes, and target share context.
 Write like a fantasy analyst on a podcast — specific, enthusiastic, and grounded in real situation.
 Ignore dynasty value and long-term upside — every comment should be about winning your league THIS season.
+Never use the word "VORP" anywhere in your response, not even in phrases like "VORP gap" or "VORP advantage." Instead say things like "biggest gap on the board", "best value available", "most underpriced player at this position", or "the board falls off a cliff after him."
+Never mention raw numerical values like dynasty value scores, redraft values, or ranking numbers. Translate those into plain language instead — "elite value at this pick", "consensus top-5 at his position", "clear drop-off after him on the board."
+You may use widely established player nicknames and abbreviations only when they are universally recognized in fantasy football — "JSN" for Jaxon Smith-Njigba, "CMC" for Christian McCaffrey. Never invent abbreviations or use the wrong initials. When in doubt, use the full name.
+Never refer to a player as a "rookie" unless their years_exp is explicitly 0. A player with years_exp of 1 or more is a veteran, even if young.
 Do not make up information not provided. If team_qb1 is provided use it. If depth_chart_order is 1, say they are the starter.
 CRITICAL: Always reference the user's specific roster by player name in your reasoning. Explain how this pick fills a specific gap or complements what they already have. For example: 'You have Bijan locked in at RB1 but no RB2 — Price gives you a legit handcuff with upside' or 'Your WR room is set with Nabers and Smith so this is pure depth.' Never give generic reasoning that could apply to any team.
 Always respond in valid JSON only. No preamble, no markdown, no explanation outside the JSON."""
@@ -331,10 +339,9 @@ def build_prompt(picks, available, my_roster, league_context, pick_number, all_p
     qb_slots = sum(1 for p in roster_positions if p in ["QB", "SUPER_FLEX"])
     is_dynasty = league_context.get("is_dynasty", True)
     taxi_total = league_context.get("taxi_slots_total", 0) or 0
-    taxi_picks = sum(1 for p in league_context.get("my_picks_this_draft", []) + league_context.get("my_existing_roster", [])
-                    if (p.get("redraft_value", 0) or 0) < taxi_thresholds.get(p.get("position", "?"), 100)
-                    and (p.get("years_exp", 99) == 0 or league_context.get("taxi_allow_vets", 0) == 1))
-    taxi_open = max(0, taxi_total - taxi_picks) if is_dynasty else 0
+    taxi_used = league_context.get("taxi_slots_used", 0) or 0
+    taxi_open = max(0, taxi_total - taxi_used) if is_dynasty else 0
+    
     picks_remaining = league_context.get("picks_remaining_for_me", 0)
     bpa_player, suggested_pick, bpa_gap = calculate_bpa(available, league_context, all_players)
     if DEV_MODE:
@@ -384,12 +391,14 @@ TOTAL PICKS MADE SO FAR: {len(picks)}
 
 IMPORTANT ROSTER CONSTRUCTION NOTES:
 - This league has {te_slots} dedicated TE slot(s). {"TE is low priority unless elite." if te_slots == 0 else "TE has some value but is not premium."}
-- This league has {qb_slots} QB-eligible slots including SUPER_FLEX. QB is elevated in value.
+- This league has {qb_slots} QB-eligible slots including Superflex. QB is elevated in value.
+- Never use "SUPER_FLEX" in your response. Always write it as "Superflex."
 - Only recommend a TE if they are clearly the best available player by a significant margin.
 - Prioritize QB, RB, and WR unless a TE represents exceptional value.
+- Never suggest an alternative at the same position as the recommendation by saying it is an option "if you don't want another [position]." If the recommendation is a WR and an alternative is also a WR, frame it as the next best player at that position, not as a positional hedge.
 - You have {picks_remaining} picks remaining in this draft including this one.
-{f"- You have {taxi_open} open taxi squad slots. Developmental rookies can be stashed there for up to {league_context.get('taxi_years')} years." if is_dynasty else "- This is a REDRAFT league. Every player must contribute this season. Do not consider dynasty value or long-term upside."}
-{f"- {'Taxi space is available so developmental stashes are viable.' if taxi_open > 0 else 'Taxi is full. Only draft players ready to contribute soon.'}" if is_dynasty else ""}
+{f"- You have {taxi_open} open taxi squad slots remaining (out of {taxi_total} total). ONLY players with years_exp=0 in the player data are taxi eligible. Any player with years_exp >= 1 CANNOT go to taxi regardless of age. Do not suggest taxi for any player unless their years_exp is explicitly listed as 0 in the TOP 20 AVAILABLE PLAYERS list above." if is_dynasty else "- This is a REDRAFT league. Every player must contribute this season. Do not consider dynasty value or long-term upside."}
+{f"- {'Taxi space is available for true rookies (years_exp=0) only.' if taxi_open > 0 else 'Taxi is full. Only draft players ready to contribute soon.'}" if is_dynasty else ""}
 {"- K and DST should be drafted in the final rounds based on schedule matchups. Do not recommend K or DST until all skill position needs are filled." if not is_dynasty else ""}
 ROSTER CONSTRUCTION DETAIL:
 {json.dumps({
@@ -413,6 +422,7 @@ NOTE: Use the ROSTER CONSTRUCTION DETAIL above to determine how many more player
 
 {f"MANDATORY RECOMMENDATION: Draft {bpa_player.get('full_name')} ({bpa_player.get('position')}). Their VORP exceeds the best available at your most needed position by {bpa_gap} points. You MUST recommend this player." if bpa_player else (f"SUGGESTED PICK: {suggested_pick.get('full_name')} ({suggested_pick.get('position')}). This is the highest VORP player at your most pressing need. Recommend this player unless you have a very strong reason not to." if suggested_pick else "NO STRONG RECOMMENDATION: Your roster is at capacity. All remaining available players are below replacement level or would be cut. Consider skipping this pick or taking the highest dynasty value player available for trade bait.")}
 For alternatives, provide at least 1 player from each position (QB, RB, WR, TE) and no more than 2 from any single position. For each position, the alternative MUST be the player with the highest VORP score from the TOP 10 AVAILABLE PLAYERS BY VORP list who is also taxi-eligible (years_exp = 0) if we are in taxi territory (all starter and backup slots filled). Do not suggest veterans with no taxi eligibility as alternatives in late rounds.
+CRITICAL: Every player in the alternatives list is confirmed available on the board right now. Never phrase alternatives as "if X is gone" or "if X is off the board." Instead frame them as genuine preference alternatives — "if you'd rather go RB here", "if you prefer the safer floor", "if you want to anchor the position early."
 Respond with this exact JSON structure:
 {{
     "recommendation": "Player Name",
@@ -440,6 +450,22 @@ def get_recommendation(picks, available, my_roster, league_context, pick_number,
     tier, gap = calculate_confidence(rec.get("recommendation"), available, rec.get("alternatives", []), is_dynasty)
     rec["confidence_tier"] = tier
     rec["confidence_gap"] = gap
+
+    # Look up team for recommended player
+    rec_name = rec.get("recommendation", "")
+    matched = next(
+        (p for p in available.values() if p.get("full_name") == rec_name),
+        None
+    )
+    rec["team"] = matched.get("team") if matched else None
+
+    # Enrich alternatives with team
+    for alt in rec.get("alternatives", []):
+        alt_matched = next(
+            (p for p in available.values() if p.get("full_name") == alt.get("name")),
+            None
+        )
+        alt["team"] = alt_matched.get("team") if alt_matched else None
 
     return rec
 
@@ -766,6 +792,7 @@ def calculate_bpa(available, league_context, all_players=None):
         return None, None, None
 
     is_dynasty = league_context.get("is_dynasty", True)
+    at_capacity_positions = []
     if not is_dynasty:
         # Redraft mode - no taxi, just positional need and BPA
         backup_needs = league_context.get("backup_needs", {})
