@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <title>Draft Assistant</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+
+  <!-- SETUP SCREEN -->
+  <div id="screen-setup" class="screen active">
+    <div class="setup-wrap">
+      <div class="setup-header">
+        <h1 class="logo">Draft Assistant</h1>
+        <p class="setup-tagline">Your analyst in your ear.</p>
+      </div>
+      <div class="setup-form">
+        <div class="field">
+          <label class="field-label">Sleeper Username</label>
+          <input type="text" id="input-username" class="field-input" placeholder="your username" autocomplete="off" autocapitalize="off">
+        </div>
+        <button id="btn-load-leagues" class="btn-primary">Load Leagues</button>
+        <div id="setup-error" class="error-msg hidden"></div>
+      </div>
+      <div id="league-list" class="league-list hidden"></div>
+    </div>
+  </div>
+
+  <!-- DRAFT SCREEN -->
+  <div id="screen-draft" class="screen hidden">
+
+    <!-- Header -->
+    <header class="draft-header">
+      <div class="header-left">
+        <h1 class="logo">Draft Assistant</h1>
+        <span id="header-league" class="header-league"></span>
+      </div>
+      <button id="btn-change-league" class="btn-ghost">Change</button>
+    </header>
+
+    <!-- Stats bar -->
+    <div class="stats-bar">
+      <div class="stat">
+        <div class="stat-label">Pick</div>
+        <div class="stat-value" id="stat-pick">—</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Mine</div>
+        <div class="stat-value" id="stat-mine">0</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Taxi</div>
+        <div class="stat-value" id="stat-taxi">—</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Left</div>
+        <div class="stat-value" id="stat-left">—</div>
+      </div>
+    </div>
+
+    <!-- Picks feed -->
+    <div class="picks-section">
+      <div class="section-label">Draft Board</div>
+      <div id="picks-feed" class="picks-feed"></div>
+    </div>
+
+    <!-- Recommendation card -->
+    <div class="rec-card" id="rec-card">
+      <div class="rec-empty" id="rec-empty">
+        <p>Tap the button below to get your recommendation.</p>
+      </div>
+      <div id="rec-content" class="hidden">
+        <div class="rec-label">Recommended Pick</div>
+        <div class="rec-player" id="rec-player"></div>
+        <div class="rec-meta" id="rec-meta"></div>
+        <div class="rec-conf">
+          <div class="conf-bar">
+            <div class="conf-fill" id="conf-fill"></div>
+          </div>
+          <div class="conf-label" id="conf-label"></div>
+        </div>
+        <div class="rec-reasoning" id="rec-reasoning"></div>
+
+        <!-- Tabs -->
+        <div class="tabs">
+          <button class="tab active" data-tab="alternatives">Alternatives</button>
+          <button class="tab" data-tab="roster">Roster</button>
+          <button class="tab" data-tab="notes">Notes</button>
+        </div>
+
+        <div id="tab-alternatives" class="tab-content active">
+          <div id="alts-list" class="alts-list"></div>
+        </div>
+
+        <div id="tab-roster" class="tab-content hidden">
+          <div id="roster-content"></div>
+        </div>
+
+        <div id="tab-notes" class="tab-content hidden">
+          <div id="notes-content"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sticky button -->
+    <div class="sticky-footer">
+      <button id="btn-recommend" class="btn-recommend">
+        <span id="btn-recommend-text">Get Recommendation</span>
+        <span id="btn-recommend-spinner" class="spinner hidden"></span>
+      </button>
+      <button id="btn-refresh" class="btn-refresh" title="Refresh draft">↺</button>
+    </div>
+
+  </div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
