@@ -173,7 +173,7 @@ body {
 
 .league-meta {
   font-size: 12px;
-  color: var(--gray-400);
+  color: var(--gray-600);
 }
 
 .league-status {
@@ -264,7 +264,7 @@ body {
   font-size: 9px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: var(--gray-400);
+  color: var(--gray-600);
   margin-bottom: 2px;
 }
 
@@ -293,7 +293,7 @@ body {
   font-size: 9px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: var(--gray-400);
+  color: var(--gray-800);
   margin-bottom: 8px;
 }
 
@@ -448,6 +448,7 @@ body {
   border: 1px solid var(--gray-200);
   padding: 16px;
   margin-bottom: 12px;
+  min-height: 0;
 }
 
 .rec-columns-card {
@@ -470,14 +471,14 @@ body {
   font-size: 14px;
   font-style: italic;
   color: var(--gray-400);
-  padding: 24px 0 8px;
+  padding: 16px 0;
 }
 
 .rec-label {
   font-size: 9px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: var(--gray-400);
+  color: var(--gray-800);
   margin-bottom: 8px;
 }
 
@@ -538,7 +539,7 @@ body {
 
 .conf-label {
   font-size: 10px;
-  color: var(--gray-400);
+  color: var(--gray-600);
   white-space: nowrap;
   letter-spacing: 0.04em;
 }
@@ -622,7 +623,7 @@ body {
 
 .alt-team {
   font-size: 11px;
-  color: var(--gray-400);
+  color: var(--gray-600);
 }
 
 .alt-reason {
@@ -648,7 +649,7 @@ body {
   font-size: 9px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: var(--gray-400);
+  color: var(--gray-600);
   border-bottom: 0.5px solid var(--gray-200);
   padding-bottom: 4px;
   margin-bottom: 6px;
@@ -736,7 +737,7 @@ body {
   font-size: 9px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--gray-400);
+  color: var(--gray-600);
   margin-bottom: 2px;
 }
 
@@ -851,7 +852,7 @@ body {
   }
 
   .rec-card {
-    padding: 20px 24px 100px;
+    padding: 0;
   }
 
   .rec-player {
