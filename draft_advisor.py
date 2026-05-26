@@ -856,6 +856,11 @@ def calculate_bpa(available, league_context, all_players=None):
         ]
         if DEV_MODE:
             print(f"at_capacity_positions: {at_capacity_positions}")
+        # In Superflex, if QB is needed and we have zero QBs, force QB recommendation
+        has_zero_qb = picks_by_pos.get("QB", 0) == 0 and has_superflex
+        if has_zero_qb and most_needed_pos == "QB" and best_needed:
+            return bpa_player, best_needed["player"], 0
+
         best_overall = next(
             (v for v in viable if v["position"] not in at_capacity_positions),
             viable[0] if viable else None
