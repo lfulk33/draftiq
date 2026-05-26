@@ -285,6 +285,10 @@ body {
   border: 1px solid var(--gray-200);
 }
 
+.picks-feed {
+  background: var(--white);
+}
+
 .section-label {
   font-size: 9px;
   letter-spacing: 0.12em;
@@ -321,7 +325,7 @@ body {
   border: 0.5px solid var(--gray-200);
   border-radius: var(--radius);
   padding: 10px;
-  background: var(--white);
+  background: var(--gray-100);
 }
 
 .pick-card.mine {
