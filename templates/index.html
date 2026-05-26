@@ -78,18 +78,21 @@
         <p>Tap the button below to get your recommendation.</p>
       </div>
       <div id="rec-content" class="hidden">
-        <div id="rec-prompt" class="rec-prompt">Tap Get Recommendation for your next pick.</div>
-        <div class="rec-label">Recommended Pick</div>
-        <div class="rec-player" id="rec-player"></div>
-        <div class="rec-meta" id="rec-meta"></div>
-        <div class="rec-conf">
-          <div class="conf-bar">
-            <div class="conf-fill" id="conf-fill"></div>
+        <div class="rec-main-card">
+          <div id="rec-prompt" class="rec-prompt">Tap Get Recommendation for your next pick.</div>
+          <div class="rec-label">Recommended Pick</div>
+          <div class="rec-player" id="rec-player"></div>
+          <div class="rec-meta" id="rec-meta"></div>
+          <div class="rec-conf">
+            <div class="conf-bar">
+              <div class="conf-fill" id="conf-fill"></div>
+            </div>
+            <div class="conf-label" id="conf-label"></div>
           </div>
-          <div class="conf-label" id="conf-label"></div>
+          <div class="rec-reasoning" id="rec-reasoning"></div>
         </div>
-        <div class="rec-reasoning" id="rec-reasoning"></div>
 
+        <div class="rec-columns-card">
         <div class="rec-card-inner">
           <!-- Tabs (mobile only) -->
           <div class="tabs">
@@ -112,6 +115,8 @@
             <div class="col-header">Scouting Notes</div>
             <div id="notes-content"></div>
           </div>
+        </div>
+        </div>
         </div>
       </div>
     </div>
