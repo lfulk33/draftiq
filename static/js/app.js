@@ -451,11 +451,12 @@ function renderRoster() {
 
     byPos[pos].forEach(p => {
       const isStarter = lc.my_starters?.some(s => s.name === p.name);
+      const isTaxi = lc.my_taxi_players?.includes(p.name);
       const row = document.createElement('div');
       row.className = 'roster-player-row';
       row.innerHTML = `
         <div class="roster-player-name ${isStarter ? 'starter' : ''}">
-          ${isStarter ? '<span class="starter-dot"></span>' : ''}${p.name}
+          ${isStarter ? '<span class="starter-dot"></span>' : ''}${p.name}${isTaxi ? ' <span class="taxi-badge">TAXI</span>' : ''}
         </div>
       `;
       group.appendChild(row);
@@ -493,7 +494,7 @@ function renderNotes(rec) {
   if (lc) {
     const needsItem = document.createElement('div');
     needsItem.className = 'note-item';
-    needsItem.innerHTML = '<div class="note-label">Roster Needs</div>';
+    needsItem.innerHTML = '<div class="note-label">Roster Needs</div><div class="needs-note">* includes developmental taxi stashes</div>';
 
     const grid = document.createElement('div');
     grid.className = 'needs-grid';

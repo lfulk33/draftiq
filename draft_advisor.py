@@ -1312,6 +1312,8 @@ def calculate_bpa(available, league_context, all_players=None):
 
     if DEV_MODE:
         print(f"  sim_active: {len(sim_active)}, sim_taxi: {len(sim_taxi)}")
+        print(f"  sim_active players: {[(p.get('name'), p.get('position'), p.get('redraft_value')) for p in sim_active.values()]}")
+        print(f"  sim_taxi players: {[(p.get('name'), p.get('position'), p.get('redraft_value')) for p in sim_taxi.values()]}")
 
     # Step 3: Filter to players who would actually make the roster
     sorted_vorp = sorted(

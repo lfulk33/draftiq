@@ -689,6 +689,17 @@ body {
   font-family: monospace;
 }
 
+.taxi-badge {
+  font-size: 8px;
+  letter-spacing: 0.06em;
+  color: var(--gray-400);
+  border: 0.5px solid var(--gray-200);
+  padding: 1px 4px;
+  border-radius: 2px;
+  vertical-align: 2px;
+  margin-left: 4px;
+}
+
 .starter-dot {
   display: inline-block;
   width: 5px;
@@ -735,6 +746,13 @@ body {
   grid-template-columns: repeat(2, 1fr);
   gap: 8px;
   margin-top: 8px;
+}
+
+.needs-note {
+  font-size: 10px;
+  color: var(--gray-400);
+  font-style: italic;
+  margin-bottom: 8px;
 }
 
 .need-item {

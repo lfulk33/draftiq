@@ -89,6 +89,11 @@ def build_league_context(league_detail, draft_detail, my_roster, picks,
             for pid in (starter_ids or [])
             if players.get(pid)
         ],
+        "my_taxi_players": [
+            players.get(pid, {}).get("full_name")
+            for pid in (my_roster.get("taxi") or [])
+            if players.get(pid)
+        ],
         "backup_needs": {pos: backups for pos, backups in backup_counts.items()},
         "roster_construction_detail": {
             "QB": {
@@ -148,6 +153,8 @@ def _build_draft_state(draft_id, league_id, user_id):
     my_roster = next(
         (r for r in rosters if r.get("owner_id") == user_id), None
     )
+    print(f"my_roster keys: {list(my_roster.keys()) if my_roster else 'None'}")
+    print(f"my_roster taxi: {my_roster.get('taxi') if my_roster else 'None'}")
     if not my_roster:
         raise ValueError("Roster not found for this user in this league.")
 
@@ -185,6 +192,18 @@ def _build_draft_state(draft_id, league_id, user_id):
         league_detail, draft_detail, my_roster, picks,
         my_roster_id, PLAYERS, my_draft_picks, is_dynasty, starter_ids
     )
+
+    # Identify taxi players using sim state so taxi badges show during draft
+    if is_dynasty:
+        from draft_advisor import _build_sim_state
+        all_picks = (
+            league_context.get("my_picks_this_draft", []) +
+            league_context.get("my_existing_roster", [])
+        )
+        _, sim_taxi = _build_sim_state(all_picks, league_context)
+        league_context["my_taxi_players"] = [
+            p.get("name") for p in sim_taxi.values() if p.get("name")
+        ]
 
     return {
         "draft_detail": draft_detail,
