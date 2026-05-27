@@ -131,7 +131,13 @@ def calculate_roster_needs(league_detail):
             starter_counts["RB"] += 0.5
             starter_counts["WR"] += 0.5
 
-    backup_counts = {pos: math.ceil(count / 2) for pos, count in starter_counts.items()}
+    # Only count backup needs for positions with dedicated slots.
+    # Flex-eligible positions don't create backup needs — a flex slot can be
+    # filled by any eligible position, so there's no specific backup requirement.
+    backup_counts = {
+        pos: math.ceil(count / 2) if math.floor(count) > 0 else 0
+        for pos, count in starter_counts.items()
+    }
     total_needs = {pos: math.ceil(starter_counts[pos]) + backup_counts[pos] for pos in starter_counts}
 
     return starter_counts, backup_counts, total_needs
@@ -1104,11 +1110,11 @@ def _find_candidates(viable, most_needed_pos, picks_by_pos, league_context):
                 None
             )
 
-    # Best player overall, skipping positions already at capacity
-    best_overall = next(
-        (v for v in viable if v["position"] not in at_capacity_positions),
-        viable[0] if viable else None
-    )
+    # Best player overall by VORP — no position exclusions.
+    # The BPA threshold handles over-drafting naturally:
+    # as a position fills up, the gap between best_overall and best_needed
+    # shrinks and BPA stops firing without needing hard exclusions.
+    best_overall = viable[0] if viable else None
 
     if DEV_MODE:
         print(f"_find_candidates:")

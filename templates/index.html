@@ -77,6 +77,10 @@
       <div class="rec-empty" id="rec-empty">
         <p>Tap the button below to get your recommendation.</p>
       </div>
+      <div id="new-pick-banner" class="hidden new-pick-banner">
+        New pick detected — tap Get Recommendation for your next pick.
+      </div>
+
       <div id="rec-content" class="hidden">
         <div class="rec-main-card">
           <div id="rec-prompt" class="rec-prompt">Tap Get Recommendation for your next pick.</div>
@@ -93,42 +97,42 @@
         </div>
 
         <div class="rec-columns-card">
-        <div class="rec-card-inner">
-          <!-- Tabs (mobile only) -->
-          <div class="tabs">
-            <button class="tab active" data-tab="alternatives">Alternatives</button>
-            <button class="tab" data-tab="roster">Roster</button>
-            <button class="tab" data-tab="notes">Notes</button>
-          </div>
+          <div class="rec-card-inner">
+            <!-- Tabs (mobile only) -->
+            <div class="tabs">
+              <button class="tab active" data-tab="alternatives">Alternatives</button>
+              <button class="tab" data-tab="roster">Roster</button>
+              <button class="tab" data-tab="notes">Notes</button>
+            </div>
 
-          <div id="tab-alternatives" class="tab-content active">
-            <div class="col-header">Also Consider</div>
-            <div id="alts-list" class="alts-list"></div>
-          </div>
+            <div id="tab-alternatives" class="tab-content active">
+              <div class="col-header">Also Consider</div>
+              <div id="alts-list" class="alts-list"></div>
+            </div>
 
-          <div id="tab-roster" class="tab-content hidden">
-            <div class="col-header">Your Roster</div>
-            <div id="roster-content"></div>
-          </div>
+            <div id="tab-roster" class="tab-content hidden">
+              <div class="col-header">Your Roster</div>
+              <div id="roster-content"></div>
+            </div>
 
-          <div id="tab-notes" class="tab-content hidden">
-            <div class="col-header">Scouting Notes</div>
-            <div id="notes-content"></div>
+            <div id="tab-notes" class="tab-content hidden">
+              <div class="col-header">Scouting Notes</div>
+              <div id="notes-content"></div>
+            </div>
           </div>
-        </div>
-        </div>
         </div>
       </div>
     </div>
+  </div>
 
-    <!-- Sticky button -->
-    <div class="sticky-footer">
-      <button id="btn-recommend" class="btn-recommend">
-        <span id="btn-recommend-text">Get Recommendation</span>
-        <span id="btn-recommend-spinner" class="spinner hidden"></span>
-      </button>
-      <button id="btn-refresh" class="btn-refresh" title="Refresh draft">↺</button>
-    </div>
+  <!-- Sticky button -->
+  <div class="sticky-footer">
+    <button id="btn-recommend" class="btn-recommend">
+      <span id="btn-recommend-text">Get Recommendation</span>
+      <span id="btn-recommend-spinner" class="spinner hidden"></span>
+    </button>
+    <button id="btn-refresh" class="btn-refresh" title="Refresh draft">↺</button>
+  </div>
 
   </div>
 

@@ -466,6 +466,17 @@ body {
   font-style: italic;
 }
 
+.new-pick-banner {
+  background: var(--accent-light);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 10px 16px;
+  font-size: 13px;
+  color: var(--accent);
+  margin-bottom: 12px;
+  text-align: center;
+}
+
 .rec-prompt {
   text-align: center;
   font-size: 14px;

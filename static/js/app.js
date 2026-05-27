@@ -7,6 +7,7 @@ const state = {
   selectedDraftId: null,
   draftData: null,
   recommendation: null,
+  recommendationStale: false,
   polling: null,
 };
 
@@ -146,12 +147,11 @@ document.querySelectorAll('.tab').forEach(tab => {
   });
 });
 
-async function loadDraft() {
+async function loadDraft(disableButton = true) {
   const { selectedDraftId, selectedLeague, userId } = state;
   if (!selectedDraftId) return;
 
-  $('btn-recommend').disabled = true;
-
+  if (disableButton) $('btn-recommend').disabled = true;
   try {
     const res = await fetch(
       `/api/draft/${selectedDraftId}?league_id=${selectedLeague.league_id}&user_id=${userId}`
@@ -164,12 +164,13 @@ async function loadDraft() {
   } catch (err) {
     console.error('Draft load error:', err);
   } finally {
-    $('btn-recommend').disabled = false;
+    if (disableButton) $('btn-recommend').disabled = false;
   }
 }
 
 function renderDraftState(data) {
   const { picks, current_pick, league_context } = data;
+  if (data.my_draft_slot) state.myDraftSlot = data.my_draft_slot;
 
   // Stats
   const roundNum = Math.ceil(current_pick / (league_context.num_teams || 12));
@@ -206,7 +207,7 @@ function renderPicksFeed(picks, currentPick, numTeams) {
 
   // On-clock card first
   const clockRound = Math.ceil(currentPick / numTeams);
-  const clockSlot = currentPick - (clockRound - 1) * numTeams;
+  const clockSlot = state.myDraftSlot || (currentPick - (clockRound - 1) * numTeams);
   const clockCard = document.createElement('div');
   clockCard.className = 'pick-card on-clock';
   clockCard.innerHTML = `
@@ -262,6 +263,8 @@ function renderPicksFeed(picks, currentPick, numTeams) {
 async function getRecommendation() {
   const { selectedDraftId, selectedLeague, userId } = state;
   if (!selectedDraftId) return;
+  state.recommendation = null;
+  state.recommendationStale = false;
 
   $('btn-recommend').disabled = true;
   $('btn-recommend-text').textContent = 'Thinking...';
@@ -273,7 +276,7 @@ async function getRecommendation() {
   try {
     // Fetch fresh draft state, wait for Sleeper to propagate, then fetch again.
     // Only proceed when pick count is stable across two fetches.
-    await loadDraft();
+    await loadDraft(false);
     const pickCountBefore = state.draftData?.current_pick;
     await new Promise(resolve => setTimeout(resolve, 2000));
     await loadDraft();
@@ -365,6 +368,7 @@ function renderRecommendation(rec) {
 
   $('rec-reasoning').textContent = rec.reasoning || '';
   hide('rec-prompt');
+  hide('new-pick-banner');
   document.querySelector('.rec-label').style.visibility = 'visible';
   $('rec-player').style.visibility = 'visible';
   $('rec-meta').style.visibility = 'visible';
@@ -527,21 +531,15 @@ function startPolling() {
       const prevPick = state.draftData.current_pick;
       await loadDraft();
       if (state.draftData.current_pick !== prevPick) {
-        state.recommendation = null;
+        // Don't clear the rec card — user may still be reading it.
+        // Just show a banner and let them tap Get Recommendation when ready.
+        // Don't null out recommendation yet — user may still be reading.
+        // Mark it as stale instead so Get Recommendation knows to refresh.
+        state.recommendationStale = true;
         renderRoster();
-        renderNotes({});
-        renderAlternatives([]);
-        hide('rec-content');
-        show('rec-empty');
-        $('rec-prompt').textContent = 'New pick detected. Tap Get Recommendation.';
-        document.querySelector('.rec-label').style.visibility = 'hidden';
-        $('rec-player').style.visibility = 'hidden';
-        $('rec-meta').style.visibility = 'hidden';
-        document.querySelector('.rec-conf').style.visibility = 'hidden';
-        $('rec-reasoning').style.visibility = 'hidden';
+        show('new-pick-banner');
 
-        // Disable recommend button briefly to let Sleeper propagate the new pick
-        // before allowing a fresh recommendation request
+        // Disable recommend button briefly to let Sleeper propagate
         $('btn-recommend').disabled = true;
         $('btn-recommend-text').textContent = 'Updating...';
         setTimeout(() => {

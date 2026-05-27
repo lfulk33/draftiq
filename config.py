@@ -11,7 +11,7 @@ DEV_MODE = os.getenv("DEV_MODE", "false").lower() == "true"
 # Best player available thresholds
 # If top available player's value exceeds best available at needed position by this amount,
 # recommend best player regardless of positional need
-BPA_THRESHOLD_DYNASTY = 30
+BPA_THRESHOLD_DYNASTY = 500
 BPA_THRESHOLD_REDRAFT = 500
 TAXI_THRESHOLD_QB = 1000
 TAXI_THRESHOLD_RB = 100
@@ -21,4 +21,3 @@ REDRAFT_THRESHOLD_QB = 2000
 REDRAFT_THRESHOLD_RB = 500
 REDRAFT_THRESHOLD_WR = 500
 REDRAFT_THRESHOLD_TE = 300
-REDRAFT_QB_BACKUP = 0  # In redraft, backup QB has no lineup value

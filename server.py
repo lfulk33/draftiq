@@ -174,6 +174,13 @@ def _build_draft_state(draft_id, league_id, user_id):
     active_ids -= taxi_ids
     starter_ids = calculate_starter_ids(list(active_ids), PLAYERS, league_detail)
 
+    my_draft_slot = draft_detail.get("slot_to_roster_id", {})
+    # Find which slot this user's roster occupies
+    my_slot = next(
+        (int(slot) for slot, rid in my_draft_slot.items() if rid == my_roster_id),
+        None
+    )
+
     league_context = build_league_context(
         league_detail, draft_detail, my_roster, picks,
         my_roster_id, PLAYERS, my_draft_picks, is_dynasty, starter_ids
@@ -181,6 +188,7 @@ def _build_draft_state(draft_id, league_id, user_id):
 
     return {
         "draft_detail": draft_detail,
+        "my_slot": my_slot,
         "league_detail": league_detail,
         "my_roster": my_roster,
         "my_roster_id": my_roster_id,
@@ -268,6 +276,7 @@ def api_draft(draft_id):
             "league_context": league_context,
             "is_dynasty": is_dynasty,
             "my_roster_id": my_roster_id,
+            "my_draft_slot": state["my_slot"],
             "roster_positions": league_detail.get("roster_positions", []),
         })
 
