@@ -364,24 +364,7 @@ def build_prompt(picks, available, my_roster, league_context, pick_number, all_p
     
     picks_remaining = league_context.get("picks_remaining_for_me", 0)
     bpa_player, suggested_pick, bpa_gap = calculate_bpa(available, league_context, all_players)
-    if DEV_MODE:
-        rep = calculate_replacement_levels(league_context, all_players if all_players else {}, league_context.get("value_key", "fc_redraft_value"))
-        print(f"replacement_levels in build_prompt: {rep}")
-        vorp_debug, rep_debug = calculate_vorp(available, league_context, all_players)
-        top5 = sorted(vorp_debug, key=lambda x: x['vorp'], reverse=True)[:5]
-        print(f"Top 5 VORP: {[(v['player'].get('full_name'), v['position'], round(v['vorp'])) for v in top5]}")
-        best_te = sorted([p for p in available.values() if p.get('position') == 'TE' and p.get('fc_overall_rank')], key=lambda x: x['fc_overall_rank'])
-        if best_te:
-            print(f"Best available TE: {best_te[0].get('full_name')}, rank: {best_te[0].get('fc_overall_rank')}")
-        best_wr = sorted([p for p in available.values() if p.get('position') == 'WR' and p.get('fc_overall_rank')], key=lambda x: x['fc_overall_rank'])
-        if best_wr:
-            print(f"Best available WR: {best_wr[0].get('full_name')}, rank: {best_wr[0].get('fc_overall_rank')}")
-        best_rb = sorted([p for p in available.values() if p.get('position') == 'RB' and p.get('fc_overall_rank')], key=lambda x: x['fc_overall_rank'])
-        if best_rb:
-            print(f"Best available RB: {best_rb[0].get('full_name')}, rank: {best_rb[0].get('fc_overall_rank')}")
-        best_qb = sorted([p for p in available.values() if p.get('position') == 'QB' and p.get('fc_overall_rank')], key=lambda x: x['fc_overall_rank'])
-        if best_qb:
-            print(f"Best available QB: {best_qb[0].get('full_name')}, rank: {best_qb[0].get('fc_overall_rank')}")    
+    
     vorp_players, replacement = calculate_vorp(available, league_context, all_players)
     # Count picks already made by position (this draft + existing roster)
     # Top 3 available players by VORP at each position — used to ground alternatives
@@ -1136,22 +1119,22 @@ def _find_candidates(viable, most_needed_pos, picks_by_pos, league_context):
         print(f"  at_capacity_positions: {at_capacity_positions}")
         print(f"  best_needed: {best_needed['player'].get('full_name') if best_needed else None}, vorp: {round(best_needed['vorp']) if best_needed else None}")
         print(f"  best_overall: {best_overall['player'].get('full_name') if best_overall else None}, vorp: {round(best_overall['vorp']) if best_overall else None}")
-
+        # Top 5 by VORP at each position — permanent tuning log
+        for pos in ["QB", "RB", "WR", "TE"]:
+            top = [(v['player'].get('full_name'), round(v['vorp'])) for v in viable if v['position'] == pos][:5]
+            if top:
+                print(f"  top {pos}: {top}")
     return best_needed, best_overall
 
 
 def _count_picks_by_pos(sim_active, league_context):
     """
-    Count how many players at each position are on the active roster
-    with enough redraft value to count as a meaningful starter or backup.
+    Count how many players at each position are on the active roster.
 
-    Uses position-specific redraft thresholds to filter out low-value
-    players — a QB with redraft value 50 shouldn't count toward QB need.
-
-    Works for both dynasty and redraft. In dynasty, these thresholds are
-    lower (TAXI_THRESHOLD) since dynasty values veterans differently.
-    In redraft, REDRAFT_THRESHOLD values are higher to ensure only
-    genuinely startable players count.
+    Every drafted player counts toward positional totals regardless of value.
+    A drafted player occupies a roster spot whether they are elite or
+    developmental — value thresholds are used in taxi routing and BPA
+    decisions, not here.
 
     Args:
         sim_active:     dict of {player_id: player} on active roster
@@ -1162,31 +1145,13 @@ def _count_picks_by_pos(sim_active, league_context):
     """
     is_dynasty = league_context.get("is_dynasty", True)
 
-    # Use different thresholds for dynasty vs redraft.
-    # Dynasty thresholds are lower — a player with redraft value 150
-    # still has dynasty roster value even if they're not a starter.
-    # Redraft thresholds are higher — only count players who can
-    # actually start or contribute this season.
-    if is_dynasty:
-        thresholds = {
-            "QB": TAXI_THRESHOLD_QB,
-            "RB": TAXI_THRESHOLD_RB,
-            "WR": TAXI_THRESHOLD_WR,
-            "TE": TAXI_THRESHOLD_TE,
-        }
-    else:
-        thresholds = {
-            "QB": REDRAFT_THRESHOLD_QB,
-            "RB": REDRAFT_THRESHOLD_RB,
-            "WR": REDRAFT_THRESHOLD_WR,
-            "TE": REDRAFT_THRESHOLD_TE,
-        }
-
+    # Count all drafted players by position.
+    # Every drafted player occupies a roster spot regardless of value —
+    # thresholds are used in taxi routing and BPA decisions, not here.
     picks_by_pos = {}
     for p in sim_active.values():
         pos = p.get("position", "?")
-        redraft_val = p.get("redraft_value", 0) or 0
-        if redraft_val >= thresholds.get(pos, 100):
+        if pos in ["QB", "RB", "WR", "TE"]:
             picks_by_pos[pos] = picks_by_pos.get(pos, 0) + 1
 
     return picks_by_pos
@@ -1380,6 +1345,23 @@ def calculate_bpa(available, league_context, all_players=None):
     best_needed, best_overall = _find_candidates(
         viable, most_needed_pos, picks_by_pos, league_context
     )
+
+    # Scale threshold based on how many players we have over dedicated slots
+    # at the SAME position as best_overall. Prevents BPA from spamming one position.
+    # Each player owned beyond dedicated slots doubles the required gap.
+    dedicated = league_context.get("dedicated_slots", {})
+    if best_overall:
+        bpa_pos = best_overall["position"]
+        owned = picks_by_pos.get(bpa_pos, 0)
+        slots = dedicated.get(bpa_pos, 0)
+        if owned > slots:
+            # Linear scaling: each extra player adds 50% to the threshold.
+            # 1 over: 1.5x, 2 over: 2x, 3 over: 2.5x, 4 over: 3x
+            # Much gentler than exponential but still meaningful protection.
+            threshold = threshold * (1 + (0.5 * (owned - slots)))
+
+    if DEV_MODE:
+        print(f"  scaled threshold: {threshold}")
 
     # Step 7: Mode-specific BPA decision
     if is_dynasty:
