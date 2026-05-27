@@ -494,7 +494,7 @@ def calculate_vorp(available, league_context, all_players=None):
 
     # Count dedicated slots per position
     dedicated = {
-        "QB": sum(1 for s in roster_positions if s == "QB"),
+        "QB": sum(1 for s in roster_positions if s in ["QB", "SUPER_FLEX"]),
         "RB": sum(1 for s in roster_positions if s == "RB"),
         "WR": sum(1 for s in roster_positions if s == "WR"),
         "TE": sum(1 for s in roster_positions if s == "TE"),
@@ -808,12 +808,16 @@ def calculate_bpa(available, league_context, all_players=None):
             redraft_val = p.get("redraft_value", 0) or 0
             if redraft_val >= redraft_thresholds.get(pos, 500):
                 picks_by_pos[pos] = picks_by_pos.get(pos, 0) + 1
+        roster_detail = league_context.get("roster_construction_detail", {})
         dedicated = {
-            "QB": sum(1 for s in roster_positions if s in ["QB", "SUPER_FLEX"]),
-            "RB": sum(1 for s in roster_positions if s in ["RB", "FLEX", "WRRB_FLEX"]),
-            "WR": sum(1 for s in roster_positions if s in ["WR", "FLEX", "REC_FLEX", "WRRB_FLEX"]),
-            "TE": sum(1 for s in roster_positions if s in ["TE", "FLEX", "REC_FLEX"]),
+            pos: roster_detail.get(pos, {}).get("dedicated_slots", 0)
+            for pos in ["QB", "RB", "WR", "TE"]
         }
+        if DEV_MODE:
+            print(f"sim_active contents: {[(p.get('name'), p.get('position'), p.get('redraft_value')) for p in sim_active.values()]}")
+            print(f"dedicated from roster_detail: {dedicated}")
+            print(f"backup_needs: {backup_needs}")
+            print(f"needed_positions: {[pos for pos in ['QB', 'RB', 'WR', 'TE'] if picks_by_pos.get(pos, 0) < dedicated.get(pos, 0) + backup_needs.get(pos, 0)]}")
         # In redraft, QB backup has no lineup value in 1QB leagues
         # Only need backup QB if there are SUPER_FLEX slots
         has_superflex = any(s == "SUPER_FLEX" for s in roster_positions)
@@ -831,13 +835,45 @@ def calculate_bpa(available, league_context, all_players=None):
             print(f"redraft dedicated: {dedicated}")
             print(f"redraft effective_backup_needs: {effective_backup_needs}")
         # In redraft, prioritize positions with most slots still unfilled
-        position_deficit = {
-            pos: dedicated.get(pos, 0) + effective_backup_needs.get(pos, 0) - picks_by_pos.get(pos, 0)
-            for pos in needed_positions
-        }
-        most_needed_pos = max(position_deficit, key=lambda p: position_deficit[p]) if position_deficit else None
+        # Count remaining viable players and their values by position
+        viable_by_pos = {}
+        viable_values_by_pos = {}
+        for v in viable:
+            pos = v["position"]
+            val = v["player"].get("fc_redraft_value") or 0
+            viable_by_pos[pos] = viable_by_pos.get(pos, 0) + 1
+            viable_values_by_pos.setdefault(pos, []).append(val)
+
+        # Scarcity score combines:
+        # 1. slots still needed vs players available (supply/demand)
+        # 2. value drop-off: best player value vs average of rest (how much you lose by waiting)
+        position_scarcity = {}
+        for pos in needed_positions:
+            slots_needed = dedicated.get(pos, 0) + effective_backup_needs.get(pos, 0) - picks_by_pos.get(pos, 0)
+            players_left = viable_by_pos.get(pos, 0)
+            values = viable_values_by_pos.get(pos, [0])
+
+            if players_left == 0:
+                position_scarcity[pos] = float('inf')
+                continue
+
+            supply_ratio = slots_needed / players_left
+
+            # Drop-off: how much better is the best player vs the average of the rest
+            best_val = max(values) if values else 0
+            rest_vals = values[1:] if len(values) > 1 else [0]
+            avg_rest = sum(rest_vals) / len(rest_vals) if rest_vals else 0
+            dropoff = (best_val - avg_rest) / (avg_rest + 1)  # +1 avoids division by zero
+
+            position_scarcity[pos] = supply_ratio * (1 + dropoff)
+
+        most_needed_pos = max(position_scarcity, key=lambda p: position_scarcity[p]) if position_scarcity else None
+
         if DEV_MODE:
-            print(f"position_deficit: {position_deficit}")
+            print(f"picks_by_pos: {picks_by_pos}")
+            print(f"dedicated: {dedicated}")
+            print(f"effective_backup_needs: {effective_backup_needs}")
+            print(f"position_scarcity: {position_scarcity}")
             print(f"most_needed_pos: {most_needed_pos}")
             print(f"top 5 viable: {[(v['player'].get('full_name'), v['position'], round(v['vorp'])) for v in viable[:5]]}")
         best_needed = next(
@@ -856,10 +892,7 @@ def calculate_bpa(available, league_context, all_players=None):
         ]
         if DEV_MODE:
             print(f"at_capacity_positions: {at_capacity_positions}")
-        # In Superflex, if QB is needed and we have zero QBs, force QB recommendation
-        has_zero_qb = picks_by_pos.get("QB", 0) == 0 and has_superflex
-        if has_zero_qb and most_needed_pos == "QB" and best_needed:
-            return bpa_player, best_needed["player"], 0
+      
 
         best_overall = next(
             (v for v in viable if v["position"] not in at_capacity_positions),

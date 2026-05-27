@@ -150,6 +150,8 @@ async function loadDraft() {
   const { selectedDraftId, selectedLeague, userId } = state;
   if (!selectedDraftId) return;
 
+  $('btn-recommend').disabled = true;
+
   try {
     const res = await fetch(
       `/api/draft/${selectedDraftId}?league_id=${selectedLeague.league_id}&user_id=${userId}`
@@ -161,6 +163,8 @@ async function loadDraft() {
     renderDraftState(data);
   } catch (err) {
     console.error('Draft load error:', err);
+  } finally {
+    $('btn-recommend').disabled = false;
   }
 }
 
