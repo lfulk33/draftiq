@@ -868,7 +868,7 @@ def _bpa_decision_redraft(best_overall, best_needed, threshold):
 
 
 def _bpa_decision_dynasty(best_overall, best_needed, viable, sim_taxi,
-                           league_context, threshold):
+                           league_context, threshold, picks_by_pos=None):
     """
     BPA decision for dynasty leagues.
 
@@ -901,6 +901,11 @@ def _bpa_decision_dynasty(best_overall, best_needed, viable, sim_taxi,
     taxi_slots_total = league_context.get("taxi_slots_total", 0) or 0
     taxi_allow_vets = league_context.get("taxi_allow_vets", 0)
     taxi_full = len(sim_taxi) >= taxi_slots_total
+    picks_by_pos = picks_by_pos or {}
+    dedicated = league_context.get("dedicated_slots", {})
+    backup_needs = league_context.get("backup_needs", {})
+    has_superflex = league_context.get("has_superflex", False)
+    effective_backup_needs = dict(backup_needs)
 
     taxi_thresholds = {
         "QB": TAXI_THRESHOLD_QB,
@@ -944,7 +949,46 @@ def _bpa_decision_dynasty(best_overall, best_needed, viable, sim_taxi,
                 return best_redraft_overall["player"], best_redraft_needed["player"], gap
             return None, best_redraft_needed["player"], 0
         elif dynasty_viable:
-            # No redraft value left — best dynasty player for trade value
+            # No redraft value left — only worth recommending if the player
+            # has better dynasty value than the worst current taxi player,
+            # AND their position isn't already at capacity.
+            at_capacity_positions = [
+                pos for pos in ["QB", "RB", "WR", "TE"]
+                if picks_by_pos.get(pos, 0) >= dedicated.get(pos, 0) + effective_backup_needs.get(pos, 0)
+            ]
+
+            # Find the worst taxi player's dynasty value — the bar to clear
+            worst_taxi_value = min(
+                (p.get("dynasty_value", 0) for p in sim_taxi.values()),
+                default=0
+            )
+
+            # Only recommend players who beat the worst taxi player
+            # AND aren't at a position already at capacity
+            upgrades = [
+                v for v in dynasty_viable
+                if v["player"].get("fc_value", 0) > worst_taxi_value
+                and v["position"] not in at_capacity_positions
+            ]
+
+            if DEV_MODE:
+                print(f"  taxi_full dynasty branch - at_capacity: {at_capacity_positions}")
+                print(f"  worst_taxi_value: {worst_taxi_value}")
+                print(f"  upgrades: {[(v['player'].get('full_name'), v['position'], v['player'].get('fc_value')) for v in upgrades[:3]]}")
+
+            if upgrades:
+                return None, upgrades[0]["player"], 0
+
+            # No taxi upgrade available — just take the best available player
+            # at a needed position, even if below replacement level.
+            # In late rounds of a startup draft you always need to make a pick.
+            non_capacity_dynasty = [
+                v for v in dynasty_viable
+                if v["position"] not in at_capacity_positions
+            ]
+            if non_capacity_dynasty:
+                return None, non_capacity_dynasty[0]["player"], 0
+            # All positions at capacity — take best dynasty value regardless
             return None, dynasty_viable[0]["player"], 0
         return None, viable[0]["player"] if viable else None, 0
 
@@ -962,9 +1006,25 @@ def _bpa_decision_dynasty(best_overall, best_needed, viable, sim_taxi,
                 return None, actual_taxi_stashes[0]["player"], 0
             return None, best_overall["player"] if best_overall else None, 0
 
-        # Check if a taxi stash has higher VORP than the needed position pick
-        if actual_taxi_stashes and actual_taxi_stashes[0]["vorp"] > best_needed["vorp"]:
-            return None, actual_taxi_stashes[0]["player"], 0
+        # Check if a taxi stash has higher VORP than the needed position pick.
+        # Exclude positions already at capacity from taxi stash consideration —
+        # no point stashing a 9th QB when you already have 8.
+        at_capacity_positions = [
+            pos for pos in ["QB", "RB", "WR", "TE"]
+            if picks_by_pos.get(pos, 0) >= dedicated.get(pos, 0) + effective_backup_needs.get(pos, 0)
+        ]
+        if DEV_MODE:
+            print(f"  taxi stash at_capacity check: {at_capacity_positions}")
+            print(f"  picks_by_pos: {picks_by_pos}")
+            print(f"  dedicated: {dedicated}")
+            print(f"  effective_backup_needs: {effective_backup_needs}")
+            print(f"  actual_taxi_stashes: {[(v['player'].get('full_name'), v['position'], round(v['vorp'])) for v in actual_taxi_stashes[:5]]}")
+        viable_taxi_stashes = [
+            v for v in actual_taxi_stashes
+            if v["position"] not in at_capacity_positions
+        ]
+        if viable_taxi_stashes and viable_taxi_stashes[0]["vorp"] > best_needed["vorp"]:
+            return None, viable_taxi_stashes[0]["player"], 0
 
         if not best_overall:
             return None, best_needed["player"], 0
@@ -1290,7 +1350,8 @@ def calculate_bpa(available, league_context, all_players=None):
     # Step 7: Mode-specific BPA decision
     if is_dynasty:
         return _bpa_decision_dynasty(
-            best_overall, best_needed, viable, sim_taxi, league_context, threshold
+            best_overall, best_needed, viable, sim_taxi, league_context, threshold,
+            picks_by_pos=picks_by_pos
         )
     else:
         return _bpa_decision_redraft(best_overall, best_needed, threshold)
