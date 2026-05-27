@@ -74,7 +74,7 @@ def calculate_starter_ids(active_ids, players, league_detail):
         enriched.append({
             "id": pid,
             "position": player.get("position", "?"),
-            "value": redraft_val if redraft_val > 0 else dynasty_val
+            "value": redraft_val  # use redraft value only; 0 means not starter-worthy
         })
 
     enriched.sort(key=lambda x: x["value"], reverse=True)
@@ -687,9 +687,16 @@ def _build_sim_state(all_picks, league_context):
     """
     Build a simulated roster state from all picks made so far.
 
-    Routes each player to sim_active or sim_taxi based on their redraft value
-    relative to positional taxi thresholds. In redraft leagues, taxi_slots_total
-    is 0 so all players go to sim_active unconditionally.
+    Two-pass approach:
+      Pass 1: Route players with significant redraft value to sim_active.
+              Collect taxi-eligible players (low/no redraft value, years_exp=0)
+              as candidates.
+      Pass 2: Fill taxi slots from candidates using position priority:
+              QB > TE > WR > RB (RBs have shortest development window).
+              Within each position, keep highest dynasty value on taxi.
+              Remaining candidates go to sim_active.
+
+    In redraft leagues taxi_slots_total=0 so all players go to sim_active.
 
     Args:
         all_picks:      list of player dicts from my_picks_this_draft +
@@ -704,8 +711,6 @@ def _build_sim_state(all_picks, league_context):
     taxi_slots_total = league_context.get("taxi_slots_total", 0) or 0
     taxi_allow_vets = league_context.get("taxi_allow_vets", 0)
 
-    # Taxi thresholds: players below these redraft values are taxi candidates.
-    # Only relevant when taxi_slots_total > 0 (dynasty leagues).
     taxi_thresholds = {
         "QB": TAXI_THRESHOLD_QB,
         "RB": TAXI_THRESHOLD_RB,
@@ -715,61 +720,112 @@ def _build_sim_state(all_picks, league_context):
 
     sim_active = {}
     sim_taxi = {}
+    taxi_candidates = {}  # players eligible for taxi but not yet assigned
 
+    # Pass 1: separate active roster players from taxi candidates
     for p in all_picks:
         pid = p.get("id", p.get("name"))
         if not pid:
             continue
 
         pos = p.get("position", "?")
-        redraft_val = p.get("redraft_value", 0) or 0
+        redraft_val = p.get("redraft_value", 0) or p.get("redraft_proxy", 0) or 0
         pos_threshold = taxi_thresholds.get(pos, 100)
-
-        # A player is taxi-eligible if they are a rookie (years_exp=0)
-        # or the league allows veterans on taxi
         taxi_eligible = p.get("years_exp", 99) == 0 or taxi_allow_vets == 1
 
         if redraft_val >= pos_threshold:
-            # Above taxi threshold — proven redraft value, goes to active roster
-            sim_active[pid] = p
-        elif taxi_eligible and len(sim_taxi) < taxi_slots_total:
-            # Below threshold, taxi eligible, taxi not full — goes to taxi
-            sim_taxi[pid] = p
-        elif taxi_eligible and len(sim_taxi) >= taxi_slots_total:
-            # Taxi full — new taxi-eligible player displaces the taxi player
-            # with the highest redraft value (most active-ready) to the active
-            # roster. The developmental stashes stay on taxi.
-            if sim_taxi:
-                # Find taxi player most ready for active duty (highest redraft value).
-                # If all taxi players have no redraft value, fall back to lowest
-                # dynasty value — least valuable dynasty asset gets bumped to active.
-                any_has_redraft = any(
-                    (sim_taxi[k].get("redraft_value") or 0) > 0
-                    for k in sim_taxi
-                )
-                if any_has_redraft:
-                    bump_taxi_id = max(
-                        sim_taxi,
-                        key=lambda k: sim_taxi[k].get("redraft_value", 0) or 0
-                    )
-                else:
-                    bump_taxi_id = min(
-                        sim_taxi,
-                        key=lambda k: sim_taxi[k].get("dynasty_value", 0) or 0
-                    )
-                bump_taxi = sim_taxi[bump_taxi_id]
-                # Bump them to active, add new player to taxi
-                sim_active[bump_taxi_id] = bump_taxi
-                del sim_taxi[bump_taxi_id]
-                sim_taxi[pid] = p
+            # Proven redraft value — normally active roster.
+            # But if this position is already over active capacity AND
+            # the player is taxi-eligible, treat as taxi candidate instead.
+            dedicated = league_context.get("dedicated_slots", {})
+            backup_needs = league_context.get("backup_needs", {})
+            # Active need includes dedicated slots, flex slots eligible for this
+            # position, and backup needs. For QB this means dedicated + superflex + backup.
+            flex_slot_counts = league_context.get("flex_slot_counts", {})
+            flex_eligibility = {
+                "FLEX": {"RB", "WR", "TE"},
+                "SUPER_FLEX": {"QB", "RB", "WR", "TE"},
+                "WRRB_FLEX": {"RB", "WR"},
+                "REC_FLEX": {"WR", "TE"},
+            }
+            flex_for_pos = sum(
+                count for slot_type, count in flex_slot_counts.items()
+                if pos in flex_eligibility.get(slot_type, set())
+            )
+            active_need = dedicated.get(pos, 0) + flex_for_pos + backup_needs.get(pos, 0)
+            current_active_at_pos = sum(
+                1 for ap in sim_active.values()
+                if ap.get("position") == pos
+            )
+            if taxi_eligible and current_active_at_pos >= active_need and taxi_slots_total > 0:
+                # Position at active capacity — overflow goes to taxi candidates
+                taxi_candidates[pid] = p
             else:
                 sim_active[pid] = p
+        elif taxi_eligible:
+            # Low/no redraft value and taxi eligible — candidate for taxi
+            taxi_candidates[pid] = p
         else:
-            # Not taxi eligible — goes to active bench
+            # Not taxi eligible, low value — active bench
+            sim_active[pid] = p
+
+    # Pass 2: fill taxi slots by position priority
+    # QB and TE benefit most from developmental stashing (scarce, long runway)
+    # WR is abundant but worth stashing
+    # RB has shortest path to relevance — fill last, bump first
+    taxi_priority = ["QB", "TE", "WR", "RB"]
+
+    slots_remaining = taxi_slots_total
+    for pos_tier in taxi_priority:
+        if slots_remaining == 0:
+            break
+        # Within each position tier, prioritize lowest redraft value for taxi
+        # (pure developmental stashes). Higher redraft value = closer to
+        # active-ready = goes to active roster instead.
+        # Fall back to highest dynasty value if no redraft values present.
+        tier_candidates_list = [
+            (pid, p) for pid, p in taxi_candidates.items()
+            if p.get("position") == pos_tier
+        ]
+        any_has_redraft = any(
+            (p.get("redraft_value") or 0) > 0
+            for _, p in tier_candidates_list
+        )
+        if any_has_redraft:
+            # Sort by redraft value ascending — lowest redraft (most developmental) first.
+            # Players with no FC redraft value (0) sort before players with real values,
+            # then use search_rank as tiebreaker within the no-FC-value group.
+            tier_candidates = sorted(
+                tier_candidates_list,
+                key=lambda x: (
+                        1 if (x[1].get("redraft_value") or 0) > 0 else 0,
+                        x[1].get("redraft_value", 0) or 0,
+                        x[1].get("redraft_proxy", 0) or 0
+                    )
+            )
+        else:
+            # No FC redraft values at all — sort by search_rank ascending
+            # (lower search_rank = higher community consensus value = more active-ready)
+            # Fall back to dynasty value if no search_rank
+            tier_candidates = sorted(
+                tier_candidates_list,
+                key=lambda x: (
+                    x[1].get("search_rank", 999),
+                    -(x[1].get("dynasty_value", 0) or 0)
+                )
+            )
+        for pid, p in tier_candidates:
+            if slots_remaining == 0:
+                break
+            sim_taxi[pid] = p
+            slots_remaining -= 1
+
+    # Any taxi candidates who didn't make the cut go to active roster
+    for pid, p in taxi_candidates.items():
+        if pid not in sim_taxi:
             sim_active[pid] = p
 
     return sim_active, sim_taxi
-
 
    
 def _calculate_scarcity(viable, picks_by_pos, league_context):

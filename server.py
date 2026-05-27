@@ -49,9 +49,11 @@ def build_league_context(league_detail, draft_detail, my_roster, picks,
                 "position": player.get("position"),
                 "age": player.get("fc_age") or player.get("age"),
                 "dynasty_value": player.get("fc_value", 0),
-                "redraft_value": player.get("fc_redraft_value", 0),
+                "redraft_value": player.get("fc_redraft_value") or 0,
+                "redraft_proxy": max(0, (1000 - (player.get("search_rank") or 1000)) * 10),
                 "years_exp": player.get("years_exp", 99),
                 "overall_rank": player.get("fc_overall_rank", 999),
+                "search_rank": player.get("search_rank", 999),
             })
 
     _, backup_counts, _ = calculate_roster_needs(league_detail)
@@ -75,9 +77,11 @@ def build_league_context(league_detail, draft_detail, my_roster, picks,
                 "name": players.get(pid, {}).get("full_name", "Unknown"),
                 "position": players.get(pid, {}).get("position", "?"),
                 "dynasty_value": players.get(pid, {}).get("fc_value", 0),
-                "redraft_value": players.get(pid, {}).get("fc_redraft_value", 0),
+                "redraft_value": players.get(pid, {}).get("fc_redraft_value") or 0,
+                "redraft_proxy": max(0, (1000 - (players.get(pid, {}).get("search_rank") or 1000)) * 10),
                 "years_exp": players.get(pid, {}).get("years_exp", 99),
                 "overall_rank": players.get(pid, {}).get("fc_overall_rank", 999),
+                "search_rank": players.get(pid, {}).get("search_rank", 999),
             }
             for pid in (my_draft_picks or [])
         ],

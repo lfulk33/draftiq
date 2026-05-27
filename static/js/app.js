@@ -8,6 +8,7 @@ const state = {
   draftData: null,
   recommendation: null,
   recommendationStale: false,
+  draftFrozen: false,
   polling: null,
 };
 
@@ -117,6 +118,7 @@ async function selectLeague(league) {
 $('btn-change-league').addEventListener('click', () => {
   stopPolling();
   state.recommendation = null;
+  state.draftFrozen = false;
   showScreen('setup');
 });
 
@@ -160,7 +162,22 @@ async function loadDraft(disableButton = true) {
     if (data.error) throw new Error(data.error);
 
     state.draftData = data;
+
+    if (state.draftFrozen) {
+      // Draft frozen — only update picks feed, not roster or rec card
+      renderPicksFeed(data.picks, data.current_pick, data.league_context?.num_teams || 12);
+      return;
+    }
+
     renderDraftState(data);
+
+    // Freeze roster and recommend button when no picks remaining
+    if ((data.league_context?.picks_remaining_for_me ?? 1) <= 0) {
+      state.draftFrozen = true;
+      $('btn-recommend').disabled = true;
+      $('btn-recommend-text').textContent = 'Draft Complete';
+      // Keep polling so picks feed continues updating
+    }
   } catch (err) {
     console.error('Draft load error:', err);
   } finally {
@@ -425,10 +442,15 @@ function renderRoster() {
   const lc = state.draftData?.league_context;
   if (!lc) return;
 
+  const seen = new Set();
   const allPicks = [
     ...(lc.my_existing_roster || []),
     ...(lc.my_picks_this_draft || []),
-  ];
+  ].filter(p => {
+    if (!p.name || seen.has(p.name)) return false;
+    seen.add(p.name);
+    return true;
+  });
 
   if (!allPicks.length) {
     content.innerHTML = '<p style="color:#aaa;font-size:13px;padding:8px 0">No players drafted yet.</p>';
@@ -445,6 +467,21 @@ function renderRoster() {
   const posOrder = ['QB', 'RB', 'WR', 'TE'];
   posOrder.forEach(pos => {
     if (!byPos[pos]) return;
+    // Sort by taxi last, then by name alphabetically within active
+    byPos[pos].sort((a, b) => {
+      // Taxi always last
+      const aTaxi = lc.my_taxi_players?.includes(a.name) ? 1 : 0;
+      const bTaxi = lc.my_taxi_players?.includes(b.name) ? 1 : 0;
+      if (aTaxi !== bTaxi) return aTaxi - bTaxi;
+      // Starters before bench
+      const aStarter = lc.my_starters?.some(s => s.name === a.name) ? 0 : 1;
+      const bStarter = lc.my_starters?.some(s => s.name === b.name) ? 0 : 1;
+      if (aStarter !== bStarter) return aStarter - bStarter;
+      // Within each tier, sort by redraft value descending
+      const aVal = a.redraft_value || 0;
+      const bVal = b.redraft_value || 0;
+      return bVal - aVal;
+    });
     const group = document.createElement('div');
     group.className = 'roster-pos-group';
     group.innerHTML = `<div class="roster-pos-head">${pos}</div>`;
