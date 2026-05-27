@@ -345,8 +345,8 @@ def build_prompt(picks, available, my_roster, league_context, pick_number, all_p
     picks_remaining = league_context.get("picks_remaining_for_me", 0)
     bpa_player, suggested_pick, bpa_gap = calculate_bpa(available, league_context, all_players)
     if DEV_MODE:
-        rep = calculate_redraft_replacement(league_context, all_players)
-        print(f"redraft_replacement in build_prompt: {rep}")
+        rep = calculate_replacement_levels(league_context, all_players if all_players else {}, league_context.get("value_key", "fc_redraft_value"))
+        print(f"replacement_levels in build_prompt: {rep}")
         vorp_debug, rep_debug = calculate_vorp(available, league_context, all_players)
         top5 = sorted(vorp_debug, key=lambda x: x['vorp'], reverse=True)[:5]
         print(f"Top 5 VORP: {[(v['player'].get('full_name'), v['position'], round(v['vorp'])) for v in top5]}")
@@ -469,116 +469,201 @@ def get_recommendation(picks, available, my_roster, league_context, pick_number,
 
     return rec
 
-def calculate_vorp(available, league_context, all_players=None):
-    
-    value_type = "fc_value" if league_context.get("is_dynasty") else "fc_redraft_value"
-    is_dynasty = league_context.get("is_dynasty", True)
-    if DEV_MODE and not is_dynasty:
-        print(f"calculate_vorp: all_players={all_players is not None}, available size={len(available)}")
-    if is_dynasty:
-        max_rank = max((p.get("fc_overall_rank", 999) for p in available.values() if p.get("fc_overall_rank")), default=999)
-        vorp_players = []
-        for p in available.values():
-            rank = p.get("fc_overall_rank")
-            if rank:
-                vorp = max_rank - rank
-                vorp_players.append({
-                    "player": p,
-                    "vorp": vorp,
-                    "value": p.get("fc_value", 0),
-                    "position": p.get("position", "?")
-                })
-        return vorp_players, {}
+def calculate_replacement_levels(league_context, player_pool, value_key):
+    """
+    Calculate the replacement level value for each position (QB, RB, WR, TE).
+
+    Replacement level = the value of the best player you could pick up if you
+    skipped this position entirely. It's the baseline every player is measured
+    against when calculating VORP.
+
+    Works identically for dynasty (value_key='fc_value') and redraft
+    (value_key='fc_redraft_value') — only the value source differs.
+
+    Flex slots are handled via competition-based simulation:
+      1. Remove all dedicated starters from the pool (24 RBs gone in a
+         12-team/2-RB league, etc.)
+      2. Simulate flex filling: sort remaining eligible players by value,
+         assign them to flex slots in order until all flex slots are filled.
+         This correctly reflects that RBs and WRs fill most FLEX spots,
+         not TEs — so TE replacement level stays near its dedicated cutoff.
+      3. Replacement level = value of the first undrafted player at each
+         position after dedicated + flex slots are filled.
+
+    Args:
+        league_context: dict from build_league_context, must contain
+                        dedicated_slots, flex_slot_counts, num_teams
+        player_pool:    dict of all players (not just available) — used to
+                        find replacement level across the full talent pool
+        value_key:      'fc_value' for dynasty, 'fc_redraft_value' for redraft
+
+    Returns:
+        dict: {pos: replacement_value} for QB, RB, WR, TE
+    """
     num_teams = league_context.get("num_teams", 12)
-    roster_positions = league_context.get("roster_positions", [])
+    dedicated = league_context.get("dedicated_slots", {})
+    flex_slot_counts = league_context.get("flex_slot_counts", {})
 
-    # Count dedicated slots per position
-    dedicated = {
-        "QB": sum(1 for s in roster_positions if s in ["QB", "SUPER_FLEX"]),
-        "RB": sum(1 for s in roster_positions if s == "RB"),
-        "WR": sum(1 for s in roster_positions if s == "WR"),
-        "TE": sum(1 for s in roster_positions if s == "TE"),
-    }
-
-    # Count flex slots and their eligible positions
-    flex_slots = {
-        "FLEX": {"RB", "WR", "TE"},
+    # Maps each flex slot type to the positions eligible to fill it
+    flex_eligibility = {
+        "FLEX":      {"RB", "WR", "TE"},
         "SUPER_FLEX": {"QB", "RB", "WR", "TE"},
         "WRRB_FLEX": {"RB", "WR"},
-        "REC_FLEX": {"WR", "TE"},
+        "REC_FLEX":  {"WR", "TE"},
     }
 
-    # For each flex slot type, find replacement level
-    flex_replacement = {"QB": 0, "RB": 0, "WR": 0, "TE": 0}
-    
-    for slot_type, eligible_positions in flex_slots.items():
-        slot_count = sum(1 for s in roster_positions if s == slot_type) * num_teams
-        if slot_count == 0:
-            continue
-        
-        # Pool all available players eligible for this slot
-        player_pool = all_players if all_players else available
-        pool = sorted(
-            [p for p in player_pool.values() 
-             if p.get("position") in eligible_positions and p.get(value_type, 0)],
-            key=lambda x: x.get(value_type, 0),
-            reverse=True
-        )
-        
-        # Account for dedicated starters already filling non-flex slots
-        dedicated_starters = sum(dedicated.get(pos, 0) for pos in eligible_positions) * num_teams
-        adjusted_cutoff = slot_count + dedicated_starters
-        if len(pool) > adjusted_cutoff:
-            replacement_val = pool[adjusted_cutoff].get(value_type, 0)
-        elif pool:
-            replacement_val = pool[-1].get(value_type, 0)
-        else:
-            replacement_val = 0
-        
-        # Update flex replacement for each eligible position
-        for pos in eligible_positions:
-            flex_replacement[pos] = max(flex_replacement[pos], replacement_val)
-
-    # Positional replacement level = (dedicated_slots * num_teams + 1)th best player
-    positional_replacement = {}
+    # Step 1: Sort all players at each position by value, descending.
+    # We work from the full player pool so replacement level reflects
+    # league-wide scarcity, not just what's available to one team.
+    pos_players = {}
     for pos in ["QB", "RB", "WR", "TE"]:
-        player_pool = all_players if all_players else available
-        pos_players = sorted(
-            [p for p in player_pool.values() 
-             if p.get("position") == pos and p.get(value_type, 0)],
-            key=lambda x: x.get(value_type, 0),
+        pos_players[pos] = sorted(
+            [
+                p for p in player_pool.values()
+                if p.get("position") == pos and p.get(value_key, 0)
+            ],
+            key=lambda x: x.get(value_key, 0),
             reverse=True
         )
-        cutoff = int(dedicated[pos] * num_teams)
-        if len(pos_players) > cutoff:
-            positional_replacement[pos] = pos_players[cutoff].get(value_type, 0)
-        elif pos_players:
-            positional_replacement[pos] = pos_players[-1].get(value_type, 0)
-        else:
-            positional_replacement[pos] = 0
 
-    # Final replacement:
-    # - Positions with dedicated slots: max of positional and flex replacement
-    # - Positions with NO dedicated slots: flex replacement only (must compete for flex)
-    replacement = {
-        pos: flex_replacement.get(pos, 0) if dedicated.get(pos, 0) == 0
-        else max(positional_replacement.get(pos, 0), flex_replacement.get(pos, 0))
+    # Step 2: Mark dedicated starters as drafted.
+    # Each team drafts dedicated_slots[pos] players at each position.
+    # dedicated_cutoff[pos] = index of first undrafted player after dedicated slots.
+    dedicated_cutoff = {
+        pos: dedicated.get(pos, 0) * num_teams
         for pos in ["QB", "RB", "WR", "TE"]
     }
 
-    # Calculate VORP for each available player
+    # Track how many players at each position have been "drafted" so far.
+    # Starts at the dedicated cutoff — we'll push this further as flex slots fill.
+    drafted_count = dict(dedicated_cutoff)
+
+    # Step 3: Simulate flex slot filling via competition.
+    # For each flex slot type, build a pool of remaining eligible players
+    # sorted by value. Assign them to flex slots in order — best player gets
+    # the slot, regardless of position. This correctly models how drafters
+    # actually fill flex spots (best available wins, not evenly distributed).
+    total_flex_slots = sum(
+        count * num_teams
+        for slot_type, count in flex_slot_counts.items()
+    )
+
+    if total_flex_slots > 0:
+        # Build the combined flex candidate pool: all remaining players
+        # (after dedicated slots) who are eligible for ANY flex slot in this league.
+        # A player is eligible if their position appears in any flex slot type present.
+        all_flex_eligible_positions = set()
+        for slot_type in flex_slot_counts:
+            all_flex_eligible_positions |= flex_eligibility.get(slot_type, set())
+
+        flex_candidates = []
+        for pos in all_flex_eligible_positions:
+            # Only players not already counted as dedicated starters
+            remaining = pos_players[pos][dedicated_cutoff[pos]:]
+            for p in remaining:
+                flex_candidates.append((p.get(value_key, 0), pos, p))
+
+        # Sort all flex candidates by value descending — best player fills first
+        flex_candidates.sort(key=lambda x: x[0], reverse=True)
+
+        # Assign players to flex slots until all slots are filled.
+        # We don't need to track which specific slot they fill — just count
+        # how many players at each position get drafted via flex.
+        slots_remaining = total_flex_slots
+        for value, pos, player in flex_candidates:
+            if slots_remaining == 0:
+                break
+            # Check this player is actually eligible for at least one flex slot
+            # present in this league (some leagues have WRRB_FLEX but no FLEX, etc.)
+            eligible_for_this_league = any(
+                pos in flex_eligibility.get(slot_type, set())
+                for slot_type in flex_slot_counts
+            )
+            if eligible_for_this_league:
+                drafted_count[pos] += 1
+                slots_remaining -= 1
+
+    # Step 4: Replacement level = value of the first undrafted player
+    # at each position after dedicated + flex slots are filled.
+    replacement = {}
+    for pos in ["QB", "RB", "WR", "TE"]:
+        cutoff = drafted_count[pos]
+        players_at_pos = pos_players[pos]
+        if cutoff < len(players_at_pos):
+            # The player just outside the draft window is the replacement
+            replacement[pos] = players_at_pos[cutoff].get(value_key, 0)
+        elif players_at_pos:
+            # Everyone at this position is already drafted — use the last player
+            replacement[pos] = players_at_pos[-1].get(value_key, 0)
+        else:
+            replacement[pos] = 0
+
+    if DEV_MODE:
+        print(f"calculate_replacement_levels ({value_key}):")
+        print(f"  dedicated_cutoff: {dedicated_cutoff}")
+        print(f"  drafted_count after flex: {drafted_count}")
+        print(f"  replacement levels: {replacement}")
+
+    return replacement
+
+def calculate_vorp(available, league_context, all_players=None):
+    """
+    Score every available player by Value Over Replacement Player (VORP).
+
+    VORP = player_value - replacement_level[position]
+
+    Uses the same math for dynasty and redraft — only the value source differs:
+      - Dynasty:  fc_value (long-term dynasty value from FantasyCalc)
+      - Redraft:  fc_redraft_value (current season value from FantasyCalc)
+
+    Replacement levels are calculated from the full player pool (all_players)
+    so they reflect league-wide scarcity, not just what's on the board.
+    Falls back to available players if all_players not provided.
+
+    Args:
+        available:      dict of players still on the board (not yet drafted)
+        league_context: dict from build_league_context
+        all_players:    dict of all players in the player pool (optional)
+
+    Returns:
+        list of dicts: [{player, vorp, value, position}] sorted by vorp desc
+        dict: replacement levels per position (for debugging)
+    """
+    is_dynasty = league_context.get("is_dynasty", True)
+    value_key = league_context.get("value_key", "fc_value" if is_dynasty else "fc_redraft_value")
+
+    # Use full player pool for replacement level calculation if available,
+    # otherwise fall back to just the available players (less accurate but functional)
+    player_pool = all_players if all_players else available
+
+    # Calculate replacement levels using competition-based simulation
+    replacement = calculate_replacement_levels(league_context, player_pool, value_key)
+
+    if DEV_MODE:
+        print(f"calculate_vorp ({'dynasty' if is_dynasty else 'redraft'}):")
+        print(f"  available size: {len(available)}, pool size: {len(player_pool)}")
+        print(f"  replacement levels: {replacement}")
+
+    # Score every available player against replacement level
     vorp_players = []
     for p in available.values():
         pos = p.get("position", "?")
-        val = p.get(value_type, 0)
-        if pos in replacement and val:
-            vorp = val - replacement[pos]
-            vorp_players.append({
-                "player": p,
-                "vorp": vorp,
-                "value": val,
-                "position": pos
-            })
+        val = p.get(value_key, 0) or 0
+
+        # Skip players with no value data or at non-standard positions (K, DEF)
+        if pos not in replacement or not val:
+            continue
+
+        vorp = val - replacement[pos]
+        vorp_players.append({
+            "player": p,
+            "vorp": vorp,
+            "value": val,
+            "position": pos
+        })
+
+    # Sort by VORP descending so highest value players come first
+    vorp_players.sort(key=lambda x: x["vorp"], reverse=True)
 
     return vorp_players, replacement
 
@@ -646,44 +731,6 @@ def simulate_placement(candidate, sim_active, sim_taxi, league_context):
         else:
             return "CUT", None
 
-def calculate_redraft_replacement(league_context, all_players):
-    """Calculate redraft replacement levels for positional need assessment."""
-    num_teams = league_context.get("num_teams", 12)
-    roster_positions = league_context.get("roster_positions", [])
-    flex_slots = {
-        "FLEX": {"RB", "WR", "TE"},
-        "SUPER_FLEX": {"QB", "RB", "WR", "TE"},
-        "WRRB_FLEX": {"RB", "WR"},
-        "REC_FLEX": {"WR", "TE"},
-    }
-    dedicated = {
-        "QB": sum(1 for s in roster_positions if s == "QB"),
-        "RB": sum(1 for s in roster_positions if s == "RB"),
-        "WR": sum(1 for s in roster_positions if s == "WR"),
-        "TE": sum(1 for s in roster_positions if s == "TE"),
-    }
-    replacement = {}
-    for pos in ["QB", "RB", "WR", "TE"]:
-        flex_count = sum(
-            sum(1 for s in roster_positions if s == slot_type)
-            for slot_type, eligible in flex_slots.items()
-            if pos in eligible
-        )
-        cutoff = int((dedicated[pos] + flex_count) * num_teams)
-        player_pool = all_players if all_players else {}
-        pos_players = sorted(
-            [p for p in player_pool.values() if p.get("position") == pos and p.get("fc_redraft_value", 0)],
-            key=lambda x: x.get("fc_redraft_value", 0),
-            reverse=True
-        )
-        if len(pos_players) > cutoff:
-            replacement[pos] = pos_players[cutoff].get("fc_redraft_value", 0)
-        elif pos_players:
-            replacement[pos] = pos_players[-1].get("fc_redraft_value", 0)
-        else:
-            replacement[pos] = 0
-    return replacement
-
 def calculate_bpa(available, league_context, all_players=None):
     value_type = "fc_value" if league_context.get("is_dynasty") else "fc_redraft_value"
     threshold = league_context.get("bpa_threshold", 1000)
@@ -709,8 +756,13 @@ def calculate_bpa(available, league_context, all_players=None):
     taxi_allow_vets = league_context.get("taxi_allow_vets", 0)
     active_capacity = sum(1 for s in roster_positions if s not in ["K", "DEF"])
 
-    # Build redraft replacement levels to identify taxi candidates
-    redraft_rep = calculate_redraft_replacement(league_context, all_players)
+    # Build replacement levels to identify taxi candidates
+    # (used to determine if a player has enough redraft value for active roster vs taxi)
+    redraft_rep = calculate_replacement_levels(
+        league_context,
+        all_players if all_players else {},
+        "fc_redraft_value"  # always use redraft value for taxi threshold decisions
+    )
     
     sim_active = {}
     sim_taxi = {}
