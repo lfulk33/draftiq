@@ -384,7 +384,19 @@ def build_prompt(picks, available, my_roster, league_context, pick_number, all_p
             print(f"Best available QB: {best_qb[0].get('full_name')}, rank: {best_qb[0].get('fc_overall_rank')}")    
     vorp_players, replacement = calculate_vorp(available, league_context, all_players)
     # Count picks already made by position (this draft + existing roster)
-    
+    # Top 3 available players by VORP at each position — used to ground alternatives
+    top_by_pos = {}
+    for v in sorted(vorp_players, key=lambda x: x["vorp"], reverse=True):
+        pos = v["position"]
+        if pos not in top_by_pos:
+            top_by_pos[pos] = []
+        if len(top_by_pos[pos]) < 3:
+            top_by_pos[pos].append({
+                "name": v["player"].get("full_name"),
+                "position": pos,
+                "team": v["player"].get("team"),
+                "vorp": round(v["vorp"]),
+            })
     prompt = f"""You are advising on pick {pick_number} in a dynasty rookie draft.
 
 LEAGUE CONTEXT:
@@ -439,7 +451,10 @@ NOTE: Use the ROSTER CONSTRUCTION DETAIL above to determine how many more player
 - A position is covered when its dedicated slots are filled. Flex slots provide additional value for covered positions.
 
 {f"MANDATORY RECOMMENDATION: Draft {bpa_player.get('full_name')} ({bpa_player.get('position')}). Their VORP exceeds the best available at your most needed position by {bpa_gap} points. You MUST recommend this player." if bpa_player else (f"SUGGESTED PICK: {suggested_pick.get('full_name')} ({suggested_pick.get('position')}). This is the highest VORP player at your most pressing need. Recommend this player unless you have a very strong reason not to." if suggested_pick else "NO STRONG RECOMMENDATION: Your roster is at capacity. All remaining available players are below replacement level or would be cut. Consider skipping this pick or taking the highest dynasty value player available for trade bait.")}
-For alternatives, provide at least 1 player from each position (QB, RB, WR, TE) and no more than 2 from any single position. For each position, the alternative MUST be the player with the highest VORP score from the TOP 10 AVAILABLE PLAYERS BY VORP list who is also taxi-eligible (years_exp = 0) if we are in taxi territory (all starter and backup slots filled). Do not suggest veterans with no taxi eligibility as alternatives in late rounds.
+For alternatives, provide at least 1 player from each position (QB, RB, WR, TE) and no more than 2 from any single position. Use this list — pick the highest VORP player at each position as the alternative unless you have a strong positional reason to prefer the second. Do not suggest players not on this list:
+
+TOP ALTERNATIVES BY POSITION (use these, in order):
+{json.dumps(top_by_pos, indent=2)}
 CRITICAL: Every player in the alternatives list is confirmed available on the board right now. The recommendation has NOT been made yet — you are presenting OPTIONS, not a sequence. Write each alternative as if the user is choosing INSTEAD OF the recommendation, not AFTER it. You may reference players already confirmed on MY CURRENT ROSTER using phrases like "pair with" or "alongside" — but never reference the recommended player as if they are already drafted. Say "if you'd rather go QB here instead" or "if you prefer RB over WR at this pick."
 Respond with this exact JSON structure:
 {{
@@ -1319,6 +1334,7 @@ def calculate_bpa(available, league_context, all_players=None):
 
     # Step 1: Score all available players by VORP
     vorp_players, replacement = calculate_vorp(available, league_context, all_players)
+    
     if not vorp_players:
         return None, None, None
 

@@ -211,7 +211,7 @@ function renderPicksFeed(picks, currentPick, numTeams) {
   const clockCard = document.createElement('div');
   clockCard.className = 'pick-card on-clock';
   clockCard.innerHTML = `
-    <div class="pick-num">${formatPickNum(clockRound, clockSlot)} · on clock</div>
+    <div class="pick-num">${formatPickNum(clockRound, clockSlot)}</div>
     <div class="pick-name empty">Your pick</div>
     <div class="pick-pos"></div>
   `;
