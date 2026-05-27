@@ -735,9 +735,37 @@ def _build_sim_state(all_picks, league_context):
         elif taxi_eligible and len(sim_taxi) < taxi_slots_total:
             # Below threshold, taxi eligible, taxi not full — goes to taxi
             sim_taxi[pid] = p
+        elif taxi_eligible and len(sim_taxi) >= taxi_slots_total:
+            # Taxi full — new taxi-eligible player displaces the taxi player
+            # with the highest redraft value (most active-ready) to the active
+            # roster. The developmental stashes stay on taxi.
+            if sim_taxi:
+                # Find taxi player most ready for active duty (highest redraft value).
+                # If all taxi players have no redraft value, fall back to lowest
+                # dynasty value — least valuable dynasty asset gets bumped to active.
+                any_has_redraft = any(
+                    (sim_taxi[k].get("redraft_value") or 0) > 0
+                    for k in sim_taxi
+                )
+                if any_has_redraft:
+                    bump_taxi_id = max(
+                        sim_taxi,
+                        key=lambda k: sim_taxi[k].get("redraft_value", 0) or 0
+                    )
+                else:
+                    bump_taxi_id = min(
+                        sim_taxi,
+                        key=lambda k: sim_taxi[k].get("dynasty_value", 0) or 0
+                    )
+                bump_taxi = sim_taxi[bump_taxi_id]
+                # Bump them to active, add new player to taxi
+                sim_active[bump_taxi_id] = bump_taxi
+                del sim_taxi[bump_taxi_id]
+                sim_taxi[pid] = p
+            else:
+                sim_active[pid] = p
         else:
-            # Below threshold but not taxi eligible, or taxi full —
-            # goes to active bench regardless (veteran with low value)
+            # Not taxi eligible — goes to active bench
             sim_active[pid] = p
 
     return sim_active, sim_taxi

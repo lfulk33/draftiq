@@ -153,8 +153,6 @@ def _build_draft_state(draft_id, league_id, user_id):
     my_roster = next(
         (r for r in rosters if r.get("owner_id") == user_id), None
     )
-    print(f"my_roster keys: {list(my_roster.keys()) if my_roster else 'None'}")
-    print(f"my_roster taxi: {my_roster.get('taxi') if my_roster else 'None'}")
     if not my_roster:
         raise ValueError("Roster not found for this user in this league.")
 
