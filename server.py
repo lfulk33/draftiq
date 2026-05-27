@@ -301,6 +301,21 @@ def api_recommend():
             PLAYERS
         )
 
+        # Verify recommended player is still available.
+        # Fetch picks fresh from Sleeper right now — not the cached picks from
+        # _build_draft_state — to catch any picks made during Claude's response time.
+        rec_name = rec.get("recommendation")
+        if rec_name:
+            fresh_picks = get_picks(data["draft_id"])
+            picked_names = {
+                PLAYERS.get(p.get("player_id"), {}).get("full_name")
+                for p in fresh_picks
+                if p.get("player_id")
+            }
+            if rec_name in picked_names:
+                print(f"Race condition detected: {rec_name} already picked")
+                return jsonify({"error": "The board changed while generating your recommendation. Please try again."}), 409
+
         return jsonify(rec)
 
     except ValueError as e:

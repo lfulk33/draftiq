@@ -5,35 +5,49 @@ from config import DEV_MODE
 from config import TAXI_THRESHOLD_QB, TAXI_THRESHOLD_RB, TAXI_THRESHOLD_WR, TAXI_THRESHOLD_TE, REDRAFT_THRESHOLD_QB, REDRAFT_THRESHOLD_RB, REDRAFT_THRESHOLD_WR, REDRAFT_THRESHOLD_TE
 
 def get_system_prompt(is_dynasty=True):
-    if is_dynasty:
-        return """You are an expert dynasty fantasy football analyst and draft advisor for the 2026 NFL season.
+    """
+    Build the Claude system prompt for draft recommendations.
+
+    Shared instructions apply to both dynasty and redraft. Mode-specific
+    instructions are appended at the end to keep the base prompt DRY.
+
+    Args:
+        is_dynasty: True for dynasty leagues, False for redraft
+
+    Returns:
+        str: system prompt for Claude
+    """
+    mode_label = "dynasty" if is_dynasty else "redraft"
+    analyst_focus = (
+        "Focus on long-term player value, age curves, positional scarcity, and dynasty upside."
+        if is_dynasty else
+        "Focus on current season production, role, opportunity, and offensive context."
+    )
+    mode_instruction = (
+        "Prioritize age, long-term value, and development potential. Taxi squad eligibility matters."
+        if is_dynasty else
+        "Ignore dynasty value and long-term upside — every comment should be about winning your league THIS season."
+    )
+
+    # Shared base prompt — applies to all league types
+    base = f"""You are an expert {mode_label} fantasy football analyst and draft advisor for the 2026 NFL season.
 You give vivid, specific, confident recommendations that sound like advice from a knowledgeable friend who watches film and follows the league closely.
-Focus on long-term player value, age curves, positional scarcity, and dynasty upside.
+{analyst_focus}
 Use the team, team_qb1, depth_chart_order, and other teammate fields provided to mention specific offensive context, target share, and role clarity.
-Write like a dynasty analyst on a podcast — specific, enthusiastic, and grounded in real situation awareness.
+Write like a fantasy analyst on a podcast — specific, enthusiastic, and grounded in real situation awareness.
+{mode_instruction}
 Never use the word "VORP" anywhere in your response, not even in phrases like "VORP gap" or "VORP advantage." Instead say things like "biggest gap on the board", "best value available", "most underpriced player at this position", or "the board falls off a cliff after him."
-Never mention raw numerical values like dynasty value scores, redraft values, or ranking numbers (e.g. "dynasty value of 9523" or "ranked 14th overall"). Translate those into plain language instead — "one of the top dynasty assets at the position", "elite value at this pick", "consensus top-5 at his position."
+Never mention raw numerical values like dynasty value scores, redraft values, or ranking numbers. Translate those into plain language instead — "one of the top assets at the position", "elite value at this pick", "consensus top-5 at his position", "clear drop-off after him on the board."
 You may use widely established player nicknames and abbreviations only when they are universally recognized in fantasy football — "JSN" for Jaxon Smith-Njigba, "CMC" for Christian McCaffrey. Never invent abbreviations or use the wrong initials. When in doubt, use the full name.
 Never refer to a player as a "rookie" unless their years_exp is explicitly 0. A player with years_exp of 1 or more is a veteran, even if young.
-Prioritize age, long-term value, and development potential. Taxi squad eligibility matters.
+Never abbreviate team names — always use the full city or team abbreviation as provided in the player data (e.g. "NYG", "SF", "LAR").
 Do not make up information not provided. If team_qb1 is provided use it. If depth_chart_order is 1, say they are the starter.
-CRITICAL: Always reference the user's specific roster by player name in your reasoning. Explain how this pick fills a specific gap, complements an existing player, or why the value justifies taking it over a positional need. For example: 'You already have Allen locked in at QB1 so Williams gives you a high-upside taxi stash' or 'Your RB room is thin with only Jeanty — Price fills that need directly.' Never give generic reasoning that could apply to any team.
+CRITICAL: Always reference the user's specific roster by player name in your reasoning. Explain how this pick fills a specific gap, complements an existing player, or why the value justifies taking it over a positional need. Never give generic reasoning that could apply to any team.
+CRITICAL: The recommendation has NOT been made yet. Do not assume the user drafted the recommended player when writing alternatives. Frame alternatives as genuine preference alternatives to the recommendation.
 Always base your recommendations on the actual league settings provided, including roster construction and scoring format.
 Always respond in valid JSON only. No preamble, no markdown, no explanation outside the JSON."""
-    else:
-        return """You are an expert redraft fantasy football analyst and draft advisor for the 2026 NFL season.
-You give vivid, specific, confident recommendations that sound like advice from a knowledgeable friend who watches film and follows the league closely.
-Focus on current season production, role, opportunity, and offensive context.
-Use the team and team_qb1 fields provided to mention specific teammates, offensive schemes, and target share context.
-Write like a fantasy analyst on a podcast — specific, enthusiastic, and grounded in real situation.
-Ignore dynasty value and long-term upside — every comment should be about winning your league THIS season.
-Never use the word "VORP" anywhere in your response, not even in phrases like "VORP gap" or "VORP advantage." Instead say things like "biggest gap on the board", "best value available", "most underpriced player at this position", or "the board falls off a cliff after him."
-Never mention raw numerical values like dynasty value scores, redraft values, or ranking numbers. Translate those into plain language instead — "elite value at this pick", "consensus top-5 at his position", "clear drop-off after him on the board."
-You may use widely established player nicknames and abbreviations only when they are universally recognized in fantasy football — "JSN" for Jaxon Smith-Njigba, "CMC" for Christian McCaffrey. Never invent abbreviations or use the wrong initials. When in doubt, use the full name.
-Never refer to a player as a "rookie" unless their years_exp is explicitly 0. A player with years_exp of 1 or more is a veteran, even if young.
-Do not make up information not provided. If team_qb1 is provided use it. If depth_chart_order is 1, say they are the starter.
-CRITICAL: Always reference the user's specific roster by player name in your reasoning. Explain how this pick fills a specific gap or complements what they already have. For example: 'You have Bijan locked in at RB1 but no RB2 — Price gives you a legit handcuff with upside' or 'Your WR room is set with Nabers and Smith so this is pure depth.' Never give generic reasoning that could apply to any team.
-Always respond in valid JSON only. No preamble, no markdown, no explanation outside the JSON."""
+
+    return base
 
 def get_flex_eligible(slot_name):
     known = {
@@ -373,8 +387,6 @@ LEAGUE CONTEXT:
 LEAGUE FORMAT: {"Dynasty" if league_context.get("is_dynasty") else "Redraft"}
 SEASON: 2026
 
-{"Dynasty notes: Prioritize age, long-term value, and development potential. Taxi squad eligibility matters." if league_context.get("is_dynasty") else "Redraft notes: Prioritize immediate production and current season value. Ignore long-term dynasty upside."}
-
 MY CURRENT ROSTER:
 {json.dumps(my_players, indent=2)}
 
@@ -422,7 +434,7 @@ NOTE: Use the ROSTER CONSTRUCTION DETAIL above to determine how many more player
 
 {f"MANDATORY RECOMMENDATION: Draft {bpa_player.get('full_name')} ({bpa_player.get('position')}). Their VORP exceeds the best available at your most needed position by {bpa_gap} points. You MUST recommend this player." if bpa_player else (f"SUGGESTED PICK: {suggested_pick.get('full_name')} ({suggested_pick.get('position')}). This is the highest VORP player at your most pressing need. Recommend this player unless you have a very strong reason not to." if suggested_pick else "NO STRONG RECOMMENDATION: Your roster is at capacity. All remaining available players are below replacement level or would be cut. Consider skipping this pick or taking the highest dynasty value player available for trade bait.")}
 For alternatives, provide at least 1 player from each position (QB, RB, WR, TE) and no more than 2 from any single position. For each position, the alternative MUST be the player with the highest VORP score from the TOP 10 AVAILABLE PLAYERS BY VORP list who is also taxi-eligible (years_exp = 0) if we are in taxi territory (all starter and backup slots filled). Do not suggest veterans with no taxi eligibility as alternatives in late rounds.
-CRITICAL: Every player in the alternatives list is confirmed available on the board right now. Never phrase alternatives as "if X is gone" or "if X is off the board." Instead frame them as genuine preference alternatives — "if you'd rather go RB here", "if you prefer the safer floor", "if you want to anchor the position early."
+CRITICAL: Every player in the alternatives list is confirmed available on the board right now. The recommendation has NOT been made yet — you are presenting OPTIONS, not a sequence. Write each alternative as if the user is choosing INSTEAD OF the recommendation, not AFTER it. You may reference players already confirmed on MY CURRENT ROSTER using phrases like "pair with" or "alongside" — but never reference the recommended player as if they are already drafted. Say "if you'd rather go QB here instead" or "if you prefer RB over WR at this pick."
 Respond with this exact JSON structure:
 {{
     "recommendation": "Player Name",

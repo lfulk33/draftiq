@@ -271,7 +271,23 @@ async function getRecommendation() {
   hide('rec-content');
 
   try {
+    // Fetch fresh draft state, wait for Sleeper to propagate, then fetch again.
+    // Only proceed when pick count is stable across two fetches.
     await loadDraft();
+    const pickCountBefore = state.draftData?.current_pick;
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    await loadDraft();
+    const pickCountAfter = state.draftData?.current_pick;
+    if (pickCountAfter !== pickCountBefore) {
+      // Pick count changed during our wait — board is still updating, abort
+      $('btn-recommend').disabled = false;
+      $('btn-recommend-text').textContent = 'Get Recommendation';
+      hide('btn-recommend-spinner');
+      show('rec-content');
+      show('rec-prompt');
+      $('rec-prompt').textContent = 'Board updated. Tap Get Recommendation again.';
+      return;
+    }
 
     const res = await fetch('/api/recommend', {
       method: 'POST',
@@ -284,6 +300,27 @@ async function getRecommendation() {
     });
 
     const rec = await res.json();
+    if (res.status === 409) {
+      // Board changed during recommendation — refresh and retry once automatically
+      await loadDraft();
+      const retryRes = await fetch('/api/recommend', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          draft_id: selectedDraftId,
+          league_id: selectedLeague.league_id,
+          user_id: userId,
+        }),
+      });
+      const retryRec = await retryRes.json();
+      if (retryRec.error) throw new Error(retryRec.error);
+      state.recommendation = retryRec;
+      renderRecommendation(retryRec);
+      $('btn-recommend').disabled = false;
+      $('btn-recommend-text').textContent = 'Get Recommendation';
+      hide('btn-recommend-spinner');
+      return;
+    }
     if (rec.error) throw new Error(rec.error);
 
     state.recommendation = rec;
@@ -494,15 +531,23 @@ function startPolling() {
         renderRoster();
         renderNotes({});
         renderAlternatives([]);
-        hide('rec-empty');
-        show('rec-content');
-        show('rec-prompt');
+        hide('rec-content');
+        show('rec-empty');
         $('rec-prompt').textContent = 'New pick detected. Tap Get Recommendation.';
         document.querySelector('.rec-label').style.visibility = 'hidden';
         $('rec-player').style.visibility = 'hidden';
         $('rec-meta').style.visibility = 'hidden';
         document.querySelector('.rec-conf').style.visibility = 'hidden';
         $('rec-reasoning').style.visibility = 'hidden';
+
+        // Disable recommend button briefly to let Sleeper propagate the new pick
+        // before allowing a fresh recommendation request
+        $('btn-recommend').disabled = true;
+        $('btn-recommend-text').textContent = 'Updating...';
+        setTimeout(() => {
+          $('btn-recommend').disabled = false;
+          $('btn-recommend-text').textContent = 'Get Recommendation';
+        }, 3000);
       }
     }
   }, 5000);
