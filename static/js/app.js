@@ -299,14 +299,9 @@ async function getRecommendation() {
     await loadDraft();
     const pickCountAfter = state.draftData?.current_pick;
     if (pickCountAfter !== pickCountBefore) {
-      // Pick count changed during our wait — board is still updating, abort
-      $('btn-recommend').disabled = false;
-      $('btn-recommend-text').textContent = 'Get Recommendation';
-      hide('btn-recommend-spinner');
-      show('rec-content');
-      show('rec-prompt');
-      $('rec-prompt').textContent = 'Board updated. Tap Get Recommendation again.';
-      return;
+      // Pick count changed during our wait — retry automatically with fresh data
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      await loadDraft(false);
     }
 
     const res = await fetch('/api/recommend', {

@@ -287,6 +287,7 @@ Write ONLY the reasoning as a plain string (2-3 sentences). No JSON, no preamble
     return response.strip()
 
 def build_prompt(picks, available, my_roster, league_context, pick_number, all_players=None):
+    
     taxi_thresholds = {
         "QB": TAXI_THRESHOLD_QB,
         "RB": TAXI_THRESHOLD_RB,
@@ -364,6 +365,9 @@ def build_prompt(picks, available, my_roster, league_context, pick_number, all_p
     
     picks_remaining = league_context.get("picks_remaining_for_me", 0)
     bpa_player, suggested_pick, bpa_gap = calculate_bpa(available, league_context, all_players)
+    if DEV_MODE:
+        print(f"bpa_player: {bpa_player.get('full_name') if bpa_player else None}")
+        print(f"suggested_pick: {suggested_pick.get('full_name') if suggested_pick else None}")
     
     vorp_players, replacement = calculate_vorp(available, league_context, all_players)
     # Count picks already made by position (this draft + existing roster)
@@ -931,7 +935,7 @@ def _calculate_scarcity(viable, picks_by_pos, league_context):
     return most_needed_pos, position_scarcity
 
 
-def _bpa_decision_redraft(best_overall, best_needed, threshold):
+def _bpa_decision_redraft(best_overall, best_needed, threshold, best_needed_overall=None, needed_positions=None):
     """
     BPA decision for redraft leagues.
 
@@ -957,9 +961,13 @@ def _bpa_decision_redraft(best_overall, best_needed, threshold):
     if best_needed is None:
         return None, best_overall["player"], 0
 
-    gap = best_overall["vorp"] - best_needed["vorp"]
+    # Compare best_overall against best_needed_overall for BPA threshold check.
+    # This prevents BPA from firing just because the most scarce position
+    # has low VORP players — we compare against the best available at ANY need.
+    
 
-    # BPA fires only when the value gap is significant AND they are different players
+    # best_overall is at capacity — compare against best_needed
+    gap = best_overall["vorp"] - best_needed["vorp"]
     if (gap > threshold and
             best_overall["player"].get("full_name") != best_needed["player"].get("full_name")):
         return best_overall["player"], best_needed["player"], gap
@@ -1174,41 +1182,57 @@ def _find_candidates(viable, most_needed_pos, picks_by_pos, league_context):
         if picks_by_pos.get(pos, 0) >= dedicated.get(pos, 0) + effective_backup_needs.get(pos, 0)
     ]
 
-    # Best player at the most urgently needed position
-    best_needed = None
-    if most_needed_pos:
-        best_needed = next(
-            (v for v in viable if v["position"] == most_needed_pos),
-            None
-        )
-        # Fall back to any needed position if most_needed_pos has no players
-        if best_needed is None:
-            needed_positions = [
-                pos for pos in ["QB", "RB", "WR", "TE"]
-                if picks_by_pos.get(pos, 0) < dedicated.get(pos, 0) + effective_backup_needs.get(pos, 0)
-            ]
-            best_needed = next(
-                (v for v in viable if v["position"] in needed_positions),
-                None
-            )
+    # best_needed = highest VORP player across ALL needed positions.
+    # Scarcity determines which position to recommend when BPA doesn't fire,
+    # but the BPA threshold comparison should use the best available needed
+    # player regardless of position — otherwise BPA fires too easily when
+    # the most scarce position has low VORP players.
+    needed_positions = [
+        pos for pos in ["QB", "RB", "WR", "TE"]
+        if picks_by_pos.get(pos, 0) < dedicated.get(pos, 0) + effective_backup_needs.get(pos, 0)
+    ]
+    # Best player at any needed position by VORP
+    best_needed_overall = next(
+        (v for v in viable if v["position"] in needed_positions),
+        None
+    )
+    # Best player at the MOST SCARCE needed position (for when BPA doesn't fire)
+    best_needed_scarce = next(
+        (v for v in viable if v["position"] == most_needed_pos),
+        best_needed_overall
+    ) if most_needed_pos else best_needed_overall
 
-    # Best player overall by VORP — no position exclusions.
-    # The BPA threshold handles over-drafting naturally:
-    # as a position fills up, the gap between best_overall and best_needed
-    # shrinks and BPA stops firing without needing hard exclusions.
+    # Use best_needed_overall for BPA threshold comparison,
+    # best_needed_scarce as the actual recommendation when BPA doesn't fire
+    # Best player overall by VORP — defined here so it's available for comparison below
     best_overall = viable[0] if viable else None
+
+    # Use scarcity-based pick only if it's within reasonable range of best overall need.
+    # If the scarce position player is dramatically worse by VORP, use the overall best instead.
+    # Threshold: if best_needed_overall is more than 50% better VORP than best_needed_scarce,
+    # scarcity is being overridden by raw value gap — take the better player.
+    if (best_needed_overall and best_needed_scarce and
+            best_needed_overall["vorp"] > best_needed_scarce["vorp"] * 1.5):
+        # Scarcity pick is dramatically worse — use overall best needed instead.
+        # But if best_needed_overall == best_overall (same player), find the
+        # next best needed player so BPA comparison is meaningful.
+        best_needed = best_needed_overall
+    else:
+        best_needed = best_needed_scarce
 
     if DEV_MODE:
         print(f"_find_candidates:")
         print(f"  at_capacity_positions: {at_capacity_positions}")
-        print(f"  best_needed: {best_needed['player'].get('full_name') if best_needed else None}, vorp: {round(best_needed['vorp']) if best_needed else None}")
+        print(f"  best_needed (scarce): {best_needed_scarce['player'].get('full_name') if best_needed_scarce else None}, vorp: {round(best_needed_scarce['vorp']) if best_needed_scarce else None}")
+        print(f"  best_needed (final): {best_needed['player'].get('full_name') if best_needed else None}, vorp: {round(best_needed['vorp']) if best_needed else None}")
+        print(f"  best_needed (overall): {best_needed_overall['player'].get('full_name') if best_needed_overall else None}, vorp: {round(best_needed_overall['vorp']) if best_needed_overall else None}")
         print(f"  best_overall: {best_overall['player'].get('full_name') if best_overall else None}, vorp: {round(best_overall['vorp']) if best_overall else None}")
         # Top 5 by VORP at each position — permanent tuning log
         for pos in ["QB", "RB", "WR", "TE"]:
             top = [(v['player'].get('full_name'), round(v['vorp'])) for v in viable if v['position'] == pos][:5]
             if top:
                 print(f"  top {pos}: {top}")
-    return best_needed, best_overall
+    return best_needed, best_overall, best_needed_overall
 
 
 def _count_picks_by_pos(sim_active, league_context):
@@ -1428,7 +1452,7 @@ def calculate_bpa(available, league_context, all_players=None):
     )
 
     # Step 6: Find the two key candidates
-    best_needed, best_overall = _find_candidates(
+    best_needed, best_overall, best_needed_overall = _find_candidates(
         viable, most_needed_pos, picks_by_pos, league_context
     )
 
@@ -1456,7 +1480,11 @@ def calculate_bpa(available, league_context, all_players=None):
             picks_by_pos=picks_by_pos
         )
     else:
-        return _bpa_decision_redraft(best_overall, best_needed, threshold)
+        redraft_needed = [
+            pos for pos in ["QB", "RB", "WR", "TE"]
+            if picks_by_pos.get(pos, 0) < league_context.get("dedicated_slots", {}).get(pos, 0) + league_context.get("backup_needs", {}).get(pos, 0)
+        ]
+        return _bpa_decision_redraft(best_overall, best_needed, threshold, best_needed_overall, needed_positions=redraft_needed)
 
 def calculate_confidence(recommendation_name, available, alternatives, is_dynasty=True):
     if is_dynasty:
