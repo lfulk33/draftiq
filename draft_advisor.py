@@ -913,12 +913,19 @@ def _calculate_scarcity(viable, picks_by_pos, league_context):
 
         # Value drop-off: how much better is the best player vs the rest
         # High drop-off means "grab him now or regret it"
+        # But drop-off matters much less for backup slots than starter slots —
+        # any startable player fills a backup need, so we reduce drop-off weight
+        # when dedicated starter slots are already filled.
         best_val = max(values) if values else 0
         rest_vals = values[1:] if len(values) > 1 else [0]
         avg_rest = sum(rest_vals) / len(rest_vals) if rest_vals else 0
-        dropoff = (best_val - avg_rest) / (avg_rest + 1)  # +1 avoids division by zero
+        dropoff = (best_val - avg_rest) / (avg_rest + 1)
 
-        position_scarcity[pos] = supply_ratio * (1 + dropoff)
+        # Reduce drop-off weight for backup-only needs
+        dedicated_filled = picks_by_pos.get(pos, 0) >= dedicated.get(pos, 0)
+        dropoff_weight = 0.2 if dedicated_filled else 1.0
+
+        position_scarcity[pos] = supply_ratio * (1 + dropoff * dropoff_weight)
 
     if not position_scarcity:
         return None, {}
@@ -968,12 +975,17 @@ def _bpa_decision_redraft(best_overall, best_needed, threshold, best_needed_over
 
     # best_overall is at capacity — compare against best_needed
     gap = best_overall["vorp"] - best_needed["vorp"]
-    if (gap > threshold and
+
+    # BPA only fires if best_overall is at a needed position.
+    # A player at an at-capacity position should never override positional need.
+    best_overall_pos = best_overall["player"].get("position") if best_overall else None
+    bpa_eligible = best_overall_pos in (needed_positions or [])
+
+    if (gap > threshold and bpa_eligible and
             best_overall["player"].get("full_name") != best_needed["player"].get("full_name")):
         return best_overall["player"], best_needed["player"], gap
 
     return None, best_needed["player"], gap
-
 
 def _bpa_decision_dynasty(best_overall, best_needed, viable, sim_taxi,
                            league_context, threshold, picks_by_pos=None):
@@ -1173,7 +1185,7 @@ def _find_candidates(viable, most_needed_pos, picks_by_pos, league_context):
 
     effective_backup_needs = dict(backup_needs)
     if not is_dynasty and not has_superflex:
-        effective_backup_needs["QB"] = 0
+        effective_backup_needs["QB"] = 1
 
     # Positions where we have enough players — exclude from BPA consideration
     # so we don't recommend a 4th WR when RB is empty
@@ -1211,14 +1223,9 @@ def _find_candidates(viable, most_needed_pos, picks_by_pos, league_context):
     # If the scarce position player is dramatically worse by VORP, use the overall best instead.
     # Threshold: if best_needed_overall is more than 50% better VORP than best_needed_scarce,
     # scarcity is being overridden by raw value gap — take the better player.
-    if (best_needed_overall and best_needed_scarce and
-            best_needed_overall["vorp"] > best_needed_scarce["vorp"] * 1.5):
-        # Scarcity pick is dramatically worse — use overall best needed instead.
-        # But if best_needed_overall == best_overall (same player), find the
-        # next best needed player so BPA comparison is meaningful.
-        best_needed = best_needed_overall
-    else:
-        best_needed = best_needed_scarce
+    # best_needed is always the scarce position player.
+    # BPA in the decision function handles whether to override with best_overall.
+    best_needed = best_needed_scarce
 
     if DEV_MODE:
         print(f"_find_candidates:")
@@ -1463,12 +1470,17 @@ def calculate_bpa(available, league_context, all_players=None):
     if best_overall:
         bpa_pos = best_overall["position"]
         owned = picks_by_pos.get(bpa_pos, 0)
-        slots = dedicated.get(bpa_pos, 0)
-        if owned > slots:
-            # Linear scaling: each extra player adds 50% to the threshold.
-            # 1 over: 1.5x, 2 over: 2x, 3 over: 2.5x, 4 over: 3x
-            # Much gentler than exponential but still meaningful protection.
-            threshold = threshold * (1 + (0.5 * (owned - slots)))
+        dedicated_slots = dedicated.get(bpa_pos, 0)
+        backup = league_context.get("backup_needs", {}).get(bpa_pos, 0)
+        
+        if owned >= dedicated_slots and backup > 0:
+            # In backup territory — scale threshold up significantly.
+            # Backup slots are much less urgent than starter slots.
+            # BPA needs a much larger gap to justify taking a backup over a starter need.
+            over_dedicated = owned - dedicated_slots
+            threshold = threshold * (3 + (0.5 * over_dedicated))
+        elif owned > dedicated_slots:
+            threshold = threshold * (1 + (0.5 * (owned - dedicated_slots)))
 
     if DEV_MODE:
         print(f"  scaled threshold: {threshold}")
