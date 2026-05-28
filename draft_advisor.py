@@ -4,6 +4,16 @@ from llm_client import get_completion
 from config import DEV_MODE
 from config import TAXI_THRESHOLD_QB, TAXI_THRESHOLD_RB, TAXI_THRESHOLD_WR, TAXI_THRESHOLD_TE, REDRAFT_THRESHOLD_QB, REDRAFT_THRESHOLD_RB, REDRAFT_THRESHOLD_WR, REDRAFT_THRESHOLD_TE
 
+# Flex slot eligibility — positions that can fill each flex slot type.
+# Used in replacement level calculation, urgency scoring, and capacity checks.
+FLEX_ELIGIBILITY = {
+    "FLEX":       {"RB", "WR", "TE"},
+    "SUPER_FLEX": {"QB", "RB", "WR", "TE"},
+    "WRRB_FLEX":  {"RB", "WR"},
+    "REC_FLEX":   {"WR", "TE"},
+}
+
+
 def get_system_prompt(is_dynasty=True):
     """
     Build the Claude system prompt for draft recommendations.
@@ -524,14 +534,6 @@ def calculate_replacement_levels(league_context, player_pool, value_key):
     dedicated = league_context.get("dedicated_slots", {})
     flex_slot_counts = league_context.get("flex_slot_counts", {})
 
-    # Maps each flex slot type to the positions eligible to fill it
-    flex_eligibility = {
-        "FLEX":      {"RB", "WR", "TE"},
-        "SUPER_FLEX": {"QB", "RB", "WR", "TE"},
-        "WRRB_FLEX": {"RB", "WR"},
-        "REC_FLEX":  {"WR", "TE"},
-    }
-
     # Step 1: Sort all players at each position by value, descending.
     # We work from the full player pool so replacement level reflects
     # league-wide scarcity, not just what's available to one team.
@@ -574,7 +576,7 @@ def calculate_replacement_levels(league_context, player_pool, value_key):
         # A player is eligible if their position appears in any flex slot type present.
         all_flex_eligible_positions = set()
         for slot_type in flex_slot_counts:
-            all_flex_eligible_positions |= flex_eligibility.get(slot_type, set())
+            all_flex_eligible_positions |= FLEX_ELIGIBILITY.get(slot_type, set())
 
         flex_candidates = []
         for pos in all_flex_eligible_positions:
@@ -596,7 +598,7 @@ def calculate_replacement_levels(league_context, player_pool, value_key):
             # Check this player is actually eligible for at least one flex slot
             # present in this league (some leagues have WRRB_FLEX but no FLEX, etc.)
             eligible_for_this_league = any(
-                pos in flex_eligibility.get(slot_type, set())
+                pos in FLEX_ELIGIBILITY.get(slot_type, set())
                 for slot_type in flex_slot_counts
             )
             if eligible_for_this_league:
@@ -746,15 +748,9 @@ def _build_sim_state(all_picks, league_context):
             # Active need includes dedicated slots, flex slots eligible for this
             # position, and backup needs. For QB this means dedicated + superflex + backup.
             flex_slot_counts = league_context.get("flex_slot_counts", {})
-            flex_eligibility = {
-                "FLEX": {"RB", "WR", "TE"},
-                "SUPER_FLEX": {"QB", "RB", "WR", "TE"},
-                "WRRB_FLEX": {"RB", "WR"},
-                "REC_FLEX": {"WR", "TE"},
-            }
             flex_for_pos = sum(
                 count for slot_type, count in flex_slot_counts.items()
-                if pos in flex_eligibility.get(slot_type, set())
+                if pos in FLEX_ELIGIBILITY.get(slot_type, set())
             )
             active_need = dedicated.get(pos, 0) + flex_for_pos + backup_needs.get(pos, 0)
             current_active_at_pos = sum(
@@ -892,10 +888,15 @@ def _calculate_urgency(viable, picks_by_pos, league_context):
     if not is_dynasty and not has_superflex:
         effective_backup_needs["QB"] = 1  # allow 1 backup QB in non-superflex redraft
 
-    # Positions where we still need more players
+    flex_slot_counts = league_context.get("flex_slot_counts", {})
     needed_positions = [
         pos for pos in ["QB", "RB", "WR", "TE"]
-        if picks_by_pos.get(pos, 0) < dedicated.get(pos, 0) + effective_backup_needs.get(pos, 0)
+        if picks_by_pos.get(pos, 0) < (
+            dedicated.get(pos, 0) +
+            effective_backup_needs.get(pos, 0) +
+            sum(count for slot_type, count in flex_slot_counts.items()
+                if pos in FLEX_ELIGIBILITY.get(slot_type, set()))
+        )
     ]
 
     if not needed_positions:
@@ -923,23 +924,15 @@ def _calculate_urgency(viable, picks_by_pos, league_context):
         # Opportunity cost: value lost by waiting.
         # Can be negative if best_now is already below replacement —
         # but the drop still matters (going from -251 to -449 is real loss).
-        opportunity_cost = best_now[pos] - best_after[pos]# Opportunity cost: value lost by waiting
         opportunity_cost = max(0, best_now[pos] - best_after[pos])
 
         # Scarcity ratio: slots needed vs positive VORP players available
         # Include fractional flex slot demand — a position eligible for FLEX
         # slots has additional effective demand beyond dedicated + backup slots.
         # Same logic as calculate_replacement_levels flex simulation.
-        flex_eligibility = {
-            "FLEX":       {"RB", "WR", "TE"},
-            "SUPER_FLEX": {"QB", "RB", "WR", "TE"},
-            "WRRB_FLEX":  {"RB", "WR"},
-            "REC_FLEX":   {"WR", "TE"},
-        }
-        flex_slot_counts = league_context.get("flex_slot_counts", {})
         flex_demand = sum(
             count for slot_type, count in flex_slot_counts.items()
-            if pos in flex_eligibility.get(slot_type, set())
+            if pos in FLEX_ELIGIBILITY.get(slot_type, set())
         )
         slots_needed = max(0,
             dedicated.get(pos, 0) +
@@ -1313,11 +1306,15 @@ def _find_candidates(viable, most_needed_pos, picks_by_pos, league_context):
     if not is_dynasty and not has_superflex:
         effective_backup_needs["QB"] = 1
 
-    # Positions where we have enough players — exclude from BPA consideration
-    # so we don't recommend a 4th WR when RB is empty
+    flex_slot_counts = league_context.get("flex_slot_counts", {})
     at_capacity_positions = [
         pos for pos in ["QB", "RB", "WR", "TE"]
-        if picks_by_pos.get(pos, 0) >= dedicated.get(pos, 0) + effective_backup_needs.get(pos, 0)
+        if picks_by_pos.get(pos, 0) >= (
+            dedicated.get(pos, 0) +
+            effective_backup_needs.get(pos, 0) +
+            sum(count for slot_type, count in flex_slot_counts.items()
+                if pos in FLEX_ELIGIBILITY.get(slot_type, set()))
+        )
     ]
 
     # best_needed = highest VORP player across ALL needed positions.
@@ -1327,7 +1324,12 @@ def _find_candidates(viable, most_needed_pos, picks_by_pos, league_context):
     # the most scarce position has low VORP players.
     needed_positions = [
         pos for pos in ["QB", "RB", "WR", "TE"]
-        if picks_by_pos.get(pos, 0) < dedicated.get(pos, 0) + effective_backup_needs.get(pos, 0)
+        if picks_by_pos.get(pos, 0) < (
+            dedicated.get(pos, 0) +
+            effective_backup_needs.get(pos, 0) +
+            sum(count for slot_type, count in flex_slot_counts.items()
+                if pos in FLEX_ELIGIBILITY.get(slot_type, set()))
+        )
     ]
     # Best player at any needed position by VORP
     best_needed_overall = next(
@@ -1356,6 +1358,9 @@ def _find_candidates(viable, most_needed_pos, picks_by_pos, league_context):
     if DEV_MODE:
         print(f"_find_candidates:")
         print(f"  at_capacity_positions: {at_capacity_positions}")
+        print(f"  dedicated: {dedicated}")
+        print(f"  effective_backup_needs: {effective_backup_needs}")
+        print(f"  picks_by_pos: {picks_by_pos}")
         print(f"  best_needed (scarce): {best_needed_scarce['player'].get('full_name') if best_needed_scarce else None}, vorp: {round(best_needed_scarce['vorp']) if best_needed_scarce else None}")
         print(f"  best_needed (final): {best_needed['player'].get('full_name') if best_needed else None}, vorp: {round(best_needed['vorp']) if best_needed else None}")
         print(f"  best_needed (overall): {best_needed_overall['player'].get('full_name') if best_needed_overall else None}, vorp: {round(best_needed_overall['vorp']) if best_needed_overall else None}")
