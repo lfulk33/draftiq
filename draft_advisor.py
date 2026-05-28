@@ -873,7 +873,20 @@ def _calculate_urgency(viable, picks_by_pos, league_context):
     # Actually: picks until next turn = (num_teams - my_draft_slot) + (my_draft_slot) = num_teams
     # But at the turn (slot 1 or slot N): picks until next = num_teams * 2 - 1 or 1
     # Simplification: picks_until_next = num_teams + (num_teams - 2 * my_draft_slot + 1).abs() 
-    picks_until_next = 2 * (num_teams - my_draft_slot) + 1
+    # Recalculate picks until next turn based on current round and draft slot.
+    # In odd rounds: slot 1 picks first, waits 2*(N-1)+1 picks until next turn
+    # In even rounds: slot 1 picks last, only 1 pick until next turn (back-to-back)
+    # Use actual pick number from league context, not just our picks
+    picks_made_total = league_context.get("picks_made_total", 0)
+    if DEV_MODE:
+        print(f"  picks_made_total from context: {picks_made_total}")
+    picks_made_total = picks_made_total or sum(picks_by_pos.values()) * num_teams
+    current_round = math.ceil((picks_made_total + 1) / num_teams)
+    # For opportunity cost simulation, use picks between your current pick
+    # and your NEXT pick in the following round. Regardless of slot, other
+    # teams make 2*(num_teams-1) picks between your two consecutive round picks.
+    # This correctly models how depleted each position will be when you pick again.
+    picks_until_next = 2 * (num_teams - 1)
 
     effective_backup_needs = dict(backup_needs)
     if not is_dynasty and not has_superflex:
@@ -907,20 +920,45 @@ def _calculate_urgency(viable, picks_by_pos, league_context):
 
     urgency_scores = {}
     for pos in needed_positions:
-        # Opportunity cost: value lost by waiting
+        # Opportunity cost: value lost by waiting.
+        # Can be negative if best_now is already below replacement —
+        # but the drop still matters (going from -251 to -449 is real loss).
+        opportunity_cost = best_now[pos] - best_after[pos]# Opportunity cost: value lost by waiting
         opportunity_cost = max(0, best_now[pos] - best_after[pos])
 
         # Scarcity ratio: slots needed vs positive VORP players available
-        slots_needed = (
+        # Include fractional flex slot demand — a position eligible for FLEX
+        # slots has additional effective demand beyond dedicated + backup slots.
+        # Same logic as calculate_replacement_levels flex simulation.
+        flex_eligibility = {
+            "FLEX":       {"RB", "WR", "TE"},
+            "SUPER_FLEX": {"QB", "RB", "WR", "TE"},
+            "WRRB_FLEX":  {"RB", "WR"},
+            "REC_FLEX":   {"WR", "TE"},
+        }
+        flex_slot_counts = league_context.get("flex_slot_counts", {})
+        flex_demand = sum(
+            count for slot_type, count in flex_slot_counts.items()
+            if pos in flex_eligibility.get(slot_type, set())
+        )
+        slots_needed = max(0,
             dedicated.get(pos, 0) +
-            effective_backup_needs.get(pos, 0) -
+            effective_backup_needs.get(pos, 0) +
+            flex_demand -
             picks_by_pos.get(pos, 0)
         )
+        # Count all available players, not just positive VORP ones.
+        # A position with only negative VORP players is still scarce —
+        # the pool is depleted and getting worse each round.
+        all_players_at_pos = len([v for v in viable if v["position"] == pos])
         positive_vorp_players = len([v for v in viable if v["position"] == pos and v["vorp"] > 0])
 
-        if positive_vorp_players == 0:
-            # No positive VORP players left — position is fully depleted
-            scarcity_ratio = 0
+        if all_players_at_pos == 0:
+            # No players left at this position at all
+            scarcity_ratio = float('inf')
+        elif positive_vorp_players == 0:
+            # Only negative VORP players remain — use all players for scarcity
+            scarcity_ratio = slots_needed / all_players_at_pos
         else:
             scarcity_ratio = slots_needed / positive_vorp_players
 
