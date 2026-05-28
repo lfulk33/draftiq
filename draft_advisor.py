@@ -379,7 +379,7 @@ def build_prompt(picks, available, my_roster, league_context, pick_number, all_p
         print(f"bpa_player: {bpa_player.get('full_name') if bpa_player else None}")
         print(f"suggested_pick: {suggested_pick.get('full_name') if suggested_pick else None}")
     
-    vorp_players, replacement = calculate_vorp(available, league_context, all_players)
+    vorp_players, replacement, _, _ = calculate_vorp(available, league_context, all_players)
     # Count picks already made by position (this draft + existing roster)
     # Top 3 available players by VORP at each position — used to ground alternatives
     top_by_pos = {}
@@ -571,37 +571,28 @@ def calculate_replacement_levels(league_context, player_pool, value_key):
     )
 
     if total_flex_slots > 0:
-        # Build the combined flex candidate pool: all remaining players
-        # (after dedicated slots) who are eligible for ANY flex slot in this league.
-        # A player is eligible if their position appears in any flex slot type present.
-        all_flex_eligible_positions = set()
-        for slot_type in flex_slot_counts:
-            all_flex_eligible_positions |= FLEX_ELIGIBILITY.get(slot_type, set())
+        # Run separate competition for each flex slot type.
+        # This prevents QB from filling FLEX slots (RB/WR/TE only) just because
+        # QB is eligible for SUPER_FLEX in the same league.
+        for slot_type, count in flex_slot_counts.items():
+            eligible_positions = FLEX_ELIGIBILITY.get(slot_type, set())
+            slots_for_this_type = count * num_teams
 
-        flex_candidates = []
-        for pos in all_flex_eligible_positions:
-            # Only players not already counted as dedicated starters
-            remaining = pos_players[pos][dedicated_cutoff[pos]:]
-            for p in remaining:
-                flex_candidates.append((p.get(value_key, 0), pos, p))
+            # Build candidate pool for this specific slot type
+            flex_candidates = []
+            for pos in eligible_positions:
+                remaining = pos_players[pos][drafted_count[pos]:]
+                for p in remaining:
+                    flex_candidates.append((p.get(value_key, 0), pos, p))
 
-        # Sort all flex candidates by value descending — best player fills first
-        flex_candidates.sort(key=lambda x: x[0], reverse=True)
+            # Sort by value descending — best player fills first
+            flex_candidates.sort(key=lambda x: x[0], reverse=True)
 
-        # Assign players to flex slots until all slots are filled.
-        # We don't need to track which specific slot they fill — just count
-        # how many players at each position get drafted via flex.
-        slots_remaining = total_flex_slots
-        for value, pos, player in flex_candidates:
-            if slots_remaining == 0:
-                break
-            # Check this player is actually eligible for at least one flex slot
-            # present in this league (some leagues have WRRB_FLEX but no FLEX, etc.)
-            eligible_for_this_league = any(
-                pos in FLEX_ELIGIBILITY.get(slot_type, set())
-                for slot_type in flex_slot_counts
-            )
-            if eligible_for_this_league:
+            # Fill this slot type's slots
+            slots_remaining = slots_for_this_type
+            for value, pos, player in flex_candidates:
+                if slots_remaining == 0:
+                    break
                 drafted_count[pos] += 1
                 slots_remaining -= 1
 
@@ -626,7 +617,7 @@ def calculate_replacement_levels(league_context, player_pool, value_key):
         #print(f"  drafted_count after flex: {drafted_count}")
         #print(f"  replacement levels: {replacement}")
 
-    return replacement
+    return replacement, drafted_count, dedicated_cutoff
 
 def calculate_vorp(available, league_context, all_players=None):
     """
@@ -659,7 +650,7 @@ def calculate_vorp(available, league_context, all_players=None):
     player_pool = all_players if all_players else available
 
     # Calculate replacement levels using competition-based simulation
-    replacement = calculate_replacement_levels(league_context, player_pool, value_key)
+    replacement, drafted_count, dedicated_cutoff = calculate_replacement_levels(league_context, player_pool, value_key)
 
     #if DEV_MODE:
         #print(f"calculate_vorp ({'dynasty' if is_dynasty else 'redraft'}):")
@@ -687,7 +678,7 @@ def calculate_vorp(available, league_context, all_players=None):
     # Sort by VORP descending so highest value players come first
     vorp_players.sort(key=lambda x: x["vorp"], reverse=True)
 
-    return vorp_players, replacement
+    return vorp_players, replacement, drafted_count, dedicated_cutoff
 
 def _build_sim_state(all_picks, league_context):
     """
@@ -828,7 +819,7 @@ def _build_sim_state(all_picks, league_context):
     return sim_active, sim_taxi
 
    
-def _calculate_urgency(viable, picks_by_pos, league_context):
+def _calculate_urgency(viable, picks_by_pos, league_context, drafted_count=None, dedicated_cutoff=None):
     """
     Calculate how urgently each position needs to be addressed THIS pick.
 
@@ -889,15 +880,24 @@ def _calculate_urgency(viable, picks_by_pos, league_context):
         effective_backup_needs["QB"] = 1  # allow 1 backup QB in non-superflex redraft
 
     flex_slot_counts = league_context.get("flex_slot_counts", {})
-    needed_positions = [
-        pos for pos in ["QB", "RB", "WR", "TE"]
-        if picks_by_pos.get(pos, 0) < (
-            dedicated.get(pos, 0) +
-            effective_backup_needs.get(pos, 0) +
-            sum(count for slot_type, count in flex_slot_counts.items()
-                if pos in FLEX_ELIGIBILITY.get(slot_type, set()))
+
+    def get_flex_demand_for_pos(pos, _dc=drafted_count, _dco=dedicated_cutoff):
+        if _dc and _dco:
+            return (_dc.get(pos, 0) - _dco.get(pos, 0)) / num_teams
+        return sum(
+            count for slot_type, count in flex_slot_counts.items()
+            if pos in FLEX_ELIGIBILITY.get(slot_type, set())
         )
-    ]
+
+    needed_positions = []
+    for pos in ["QB", "RB", "WR", "TE"]:
+        fd = get_flex_demand_for_pos(pos)
+        total = dedicated.get(pos, 0) + effective_backup_needs.get(pos, 0) + fd
+        have = picks_by_pos.get(pos, 0)
+        if DEV_MODE:
+            print(f"  needed check {pos}: have={have}, need={round(total,2)} (dedicated={dedicated.get(pos,0)}, backup={effective_backup_needs.get(pos,0)}, flex={round(fd,2)})")
+        if have < total:
+            needed_positions.append(pos)
 
     if not needed_positions:
         return None, {}
@@ -930,10 +930,18 @@ def _calculate_urgency(viable, picks_by_pos, league_context):
         # Include fractional flex slot demand — a position eligible for FLEX
         # slots has additional effective demand beyond dedicated + backup slots.
         # Same logic as calculate_replacement_levels flex simulation.
-        flex_demand = sum(
-            count for slot_type, count in flex_slot_counts.items()
-            if pos in FLEX_ELIGIBILITY.get(slot_type, set())
-        )
+        # Use competition-based flex demand from replacement level simulation.
+        # This reflects how many flex slots each position actually wins in practice,
+        # not just eligibility. TE may be eligible for SUPER_FLEX but rarely wins it.
+        if drafted_count and dedicated_cutoff:
+            num_teams = league_context.get("num_teams", 12)
+            flex_demand = (drafted_count.get(pos, 0) - dedicated_cutoff.get(pos, 0)) / num_teams
+        else:
+            # Fallback to eligibility count if draft data not available
+            flex_demand = sum(
+                count for slot_type, count in flex_slot_counts.items()
+                if pos in FLEX_ELIGIBILITY.get(slot_type, set())
+            )
         slots_needed = max(0,
             dedicated.get(pos, 0) +
             effective_backup_needs.get(pos, 0) +
@@ -962,7 +970,9 @@ def _calculate_urgency(viable, picks_by_pos, league_context):
         urgency_scores[pos] = opportunity_cost * (1 + scarcity_ratio) * backup_multiplier
 
         if DEV_MODE:
-            print(f"  {pos}: opp_cost={round(opportunity_cost)}, scarcity={round(scarcity_ratio,3)}, backup_mult={backup_multiplier}, urgency={round(urgency_scores[pos])}")
+            print(f"  {pos}: opp_cost={round(opportunity_cost)}, scarcity={round(scarcity_ratio,3)}, backup_mult={backup_multiplier}, urgency={round(urgency_scores[pos])}, slots_needed={round(slots_needed,2)}, flex_demand={round(flex_demand,2)}, pos_vorp_players={positive_vorp_players}")
+            print(f"_calculate_urgency:")
+            print(f"  needed_positions: {needed_positions}")
 
     if not urgency_scores:
         return None, {}
@@ -1027,7 +1037,9 @@ def _bpa_decision_dynasty_v2(best_overall, best_needed, urgency_scores, viable=N
         print(f"  best_needed: {best_needed['player'].get('full_name')} ({needed_pos}), vorp={round(best_needed['vorp'])}, urgency={round(needed_urgency)}, score={round(needed_score)}")
         print(f"  winner: {best_v['player'].get('full_name')} ({best_pos}), score={round(best_score)}")
 
-    if best_v["player"].get("full_name") != best_needed["player"].get("full_name"):
+    # Only fire BPA if winner has a meaningful score and is different from best_needed
+    if (best_score > 0 and
+            best_v["player"].get("full_name") != best_needed["player"].get("full_name")):
         gap = best_v["vorp"] - best_needed["vorp"]
         return best_v["player"], best_needed["player"], gap
 
@@ -1300,7 +1312,7 @@ def _bpa_decision_dynasty(best_overall, best_needed, viable, sim_taxi,
         return None, best_needed["player"], gap
 
 
-def _find_candidates(viable, most_needed_pos, picks_by_pos, league_context):
+def _find_candidates(viable, most_needed_pos, picks_by_pos, league_context, drafted_count=None, dedicated_cutoff=None):
     """
     Find the two key players for the BPA decision:
       - best_needed: highest VORP player at the most needed position
@@ -1347,15 +1359,24 @@ def _find_candidates(viable, most_needed_pos, picks_by_pos, league_context):
     # but the BPA threshold comparison should use the best available needed
     # player regardless of position — otherwise BPA fires too easily when
     # the most scarce position has low VORP players.
-    needed_positions = [
-        pos for pos in ["QB", "RB", "WR", "TE"]
-        if picks_by_pos.get(pos, 0) < (
-            dedicated.get(pos, 0) +
-            effective_backup_needs.get(pos, 0) +
-            sum(count for slot_type, count in flex_slot_counts.items()
-                if pos in FLEX_ELIGIBILITY.get(slot_type, set()))
+    def get_flex_demand_for_pos(pos, _dc=drafted_count, _dco=dedicated_cutoff):
+        if _dc and _dco:
+            num_teams_local = league_context.get("num_teams", 12)
+            return (_dc.get(pos, 0) - _dco.get(pos, 0)) / num_teams_local
+        return sum(
+            count for slot_type, count in flex_slot_counts.items()
+            if pos in FLEX_ELIGIBILITY.get(slot_type, set())
         )
-    ]
+
+    needed_positions = []
+    for pos in ["QB", "RB", "WR", "TE"]:
+        fd = get_flex_demand_for_pos(pos)
+        total = dedicated.get(pos, 0) + effective_backup_needs.get(pos, 0) + fd
+        have = picks_by_pos.get(pos, 0)
+        if DEV_MODE:
+            print(f"  needed check {pos}: have={have}, need={round(total,2)} (dedicated={dedicated.get(pos,0)}, backup={effective_backup_needs.get(pos,0)}, flex={round(fd,2)})")
+        if have < total:
+            needed_positions.append(pos)
     # Best player at any needed position by VORP
     best_needed_overall = next(
         (v for v in viable if v["position"] in needed_positions),
@@ -1569,7 +1590,7 @@ def calculate_bpa(available, league_context, all_players=None):
         print(f"calculate_bpa: is_dynasty={is_dynasty}, threshold={threshold}")
 
     # Step 1: Score all available players by VORP
-    vorp_players, replacement = calculate_vorp(available, league_context, all_players)
+    vorp_players, replacement, drafted_count, dedicated_cutoff = calculate_vorp(available, league_context, all_players)
     
     if not vorp_players:
         return None, None, None
@@ -1610,13 +1631,16 @@ def calculate_bpa(available, league_context, all_players=None):
     picks_by_pos = _count_picks_by_pos(sim_active, league_context)
 
     # Step 5: Calculate positional urgency (opportunity cost × scarcity)
+    if DEV_MODE:
+        print(f"  drafted_count before urgency: {drafted_count}")
+        print(f"  dedicated_cutoff before urgency: {dedicated_cutoff}")
     most_needed_pos, urgency_scores = _calculate_urgency(
-        viable, picks_by_pos, league_context
+        viable, picks_by_pos, league_context, drafted_count, dedicated_cutoff
     )
 
     # Step 6: Find the two key candidates
     best_needed, best_overall, best_needed_overall = _find_candidates(
-        viable, most_needed_pos, picks_by_pos, league_context
+        viable, most_needed_pos, picks_by_pos, league_context, drafted_count, dedicated_cutoff
     )
 
     # Scale threshold based on how many players we have over dedicated slots
