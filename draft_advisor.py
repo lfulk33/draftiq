@@ -966,7 +966,7 @@ def _calculate_urgency(viable, picks_by_pos, league_context):
         dedicated_filled = picks_by_pos.get(pos, 0) >= dedicated.get(pos, 0)
         backup_multiplier = 0.3 if dedicated_filled else 1.0
 
-        urgency_scores[pos] = opportunity_cost * scarcity_ratio * backup_multiplier
+        urgency_scores[pos] = opportunity_cost * (1 + scarcity_ratio) * backup_multiplier
 
         if DEV_MODE:
             print(f"  {pos}: opp_cost={round(opportunity_cost)}, scarcity={round(scarcity_ratio,3)}, backup_mult={backup_multiplier}, urgency={round(urgency_scores[pos])}")
@@ -985,6 +985,51 @@ def _calculate_urgency(viable, picks_by_pos, league_context):
         print(f"  most_urgent_pos: {most_urgent_pos}")
 
     return most_urgent_pos, urgency_scores
+
+def _bpa_decision_dynasty_v2(best_overall, best_needed, urgency_scores):
+    """
+    Threshold-free BPA decision for dynasty leagues using urgency scores.
+
+    Identical logic to _bpa_decision_redraft_v2 — compare urgency of
+    best_overall's position against best_needed's position and take
+    whichever is more urgent.
+
+    Taxi routing is handled separately by _build_sim_state — this function
+    only decides WHICH player to recommend, not WHERE they go on the roster.
+
+    The backup buffer (how many backups count toward urgency) is controlled
+    by effective_backup_needs in _calculate_urgency, which will eventually
+    be tunable via a Draft Strategy Slider.
+
+    Args:
+        best_overall:   viable dict for highest VORP player
+        best_needed:    viable dict for highest VORP player at most urgent position
+        urgency_scores: dict of {pos: score} from _calculate_urgency
+
+    Returns:
+        (bpa_player, suggested_pick, gap) — same contract as other decision functions
+    """
+    if not best_overall:
+        return None, None, 0
+    if not best_needed:
+        return None, best_overall["player"], 0
+
+    overall_pos = best_overall["position"]
+    needed_pos = best_needed["position"]
+
+    overall_urgency = urgency_scores.get(overall_pos, 0)
+    needed_urgency = urgency_scores.get(needed_pos, 0)
+
+    if DEV_MODE:
+        print(f"_bpa_decision_dynasty_v2:")
+        print(f"  best_overall: {best_overall['player'].get('full_name')} ({overall_pos}), vorp={round(best_overall['vorp'])}, urgency={round(overall_urgency)}")
+        print(f"  best_needed: {best_needed['player'].get('full_name')} ({needed_pos}), vorp={round(best_needed['vorp'])}, urgency={round(needed_urgency)}")
+
+    if overall_urgency > needed_urgency:
+        gap = best_overall["vorp"] - best_needed["vorp"]
+        return best_overall["player"], best_needed["player"], gap
+
+    return None, best_needed["player"], 0
 
 def _bpa_decision_redraft_v2(best_overall, best_needed, urgency_scores):
     """
@@ -1567,10 +1612,7 @@ def calculate_bpa(available, league_context, all_players=None):
 
     # Step 7: Mode-specific BPA decision
     if is_dynasty:
-        return _bpa_decision_dynasty(
-            best_overall, best_needed, viable, sim_taxi, league_context, threshold,
-            picks_by_pos=picks_by_pos
-        )
+        return _bpa_decision_dynasty_v2(best_overall, best_needed, urgency_scores)
     else:
         return _bpa_decision_redraft_v2(best_overall, best_needed, urgency_scores)
 
