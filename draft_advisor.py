@@ -2,7 +2,7 @@ import json
 import math
 from llm_client import get_completion
 from config import DEV_MODE
-from config import TAXI_THRESHOLD_QB, TAXI_THRESHOLD_RB, TAXI_THRESHOLD_WR, TAXI_THRESHOLD_TE, REDRAFT_THRESHOLD_QB, REDRAFT_THRESHOLD_RB, REDRAFT_THRESHOLD_WR, REDRAFT_THRESHOLD_TE
+from config import TAXI_THRESHOLD_QB, TAXI_THRESHOLD_RB, TAXI_THRESHOLD_WR, TAXI_THRESHOLD_TE, REDRAFT_THRESHOLD_QB, REDRAFT_THRESHOLD_RB, REDRAFT_THRESHOLD_WR, REDRAFT_THRESHOLD_TE, URGENCY_MODIFIER
 
 # Flex slot eligibility — positions that can fill each flex slot type.
 # Used in replacement level calculation, urgency scoring, and capacity checks.
@@ -979,86 +979,111 @@ def _calculate_urgency(viable, picks_by_pos, league_context):
 
     return most_urgent_pos, urgency_scores
 
-def _bpa_decision_dynasty_v2(best_overall, best_needed, urgency_scores):
-    """
-    Threshold-free BPA decision for dynasty leagues using urgency scores.
-
-    Identical logic to _bpa_decision_redraft_v2 — compare urgency of
-    best_overall's position against best_needed's position and take
-    whichever is more urgent.
-
-    Taxi routing is handled separately by _build_sim_state — this function
-    only decides WHICH player to recommend, not WHERE they go on the roster.
-
-    The backup buffer (how many backups count toward urgency) is controlled
-    by effective_backup_needs in _calculate_urgency, which will eventually
-    be tunable via a Draft Strategy Slider.
-
-    Args:
-        best_overall:   viable dict for highest VORP player
-        best_needed:    viable dict for highest VORP player at most urgent position
-        urgency_scores: dict of {pos: score} from _calculate_urgency
-
-    Returns:
-        (bpa_player, suggested_pick, gap) — same contract as other decision functions
-    """
+def _bpa_decision_dynasty_v2(best_overall, best_needed, urgency_scores, viable=None):
     if not best_overall:
         return None, None, 0
     if not best_needed:
         return None, best_overall["player"], 0
 
+    # Score each position by its best available player's VORP × urgency^modifier.
+    # Using all viable players ensures we don't miss #2 VORP at a more urgent position.
+    position_best = {}
+    if viable:
+        for v in viable:
+            pos = v["position"]
+            if pos not in position_best or v["vorp"] > position_best[pos]["vorp"]:
+                position_best[pos] = v
+
     overall_pos = best_overall["position"]
     needed_pos = best_needed["position"]
-
     overall_urgency = urgency_scores.get(overall_pos, 0)
     needed_urgency = urgency_scores.get(needed_pos, 0)
+    overall_score = best_overall["vorp"] * (overall_urgency ** URGENCY_MODIFIER)
+    needed_score = best_needed["vorp"] * (needed_urgency ** URGENCY_MODIFIER)
+
+    # Check if any other position scores higher than best_overall
+    best_pos = overall_pos
+    best_score = overall_score
+    best_v = best_overall
+    for pos, urgency in urgency_scores.items():
+        if pos in position_best:
+            score = position_best[pos]["vorp"] * (urgency ** URGENCY_MODIFIER)
+            if score > best_score:
+                best_score = score
+                best_pos = pos
+                best_v = position_best[pos]
 
     if DEV_MODE:
+        all_scores = sorted(
+            [(position_best[pos]["player"].get("full_name"), pos,
+              round(position_best[pos]["vorp"]),
+              round(urgency_scores.get(pos, 0)),
+              round(position_best[pos]["vorp"] * (urgency_scores.get(pos, 0) ** URGENCY_MODIFIER)))
+             for pos in position_best if pos in urgency_scores],
+            key=lambda x: x[4], reverse=True
+        )[:5]
         print(f"_bpa_decision_dynasty_v2:")
-        print(f"  best_overall: {best_overall['player'].get('full_name')} ({overall_pos}), vorp={round(best_overall['vorp'])}, urgency={round(overall_urgency)}")
-        print(f"  best_needed: {best_needed['player'].get('full_name')} ({needed_pos}), vorp={round(best_needed['vorp'])}, urgency={round(needed_urgency)}")
+        print(f"  top scores: {all_scores}")
+        print(f"  best_needed: {best_needed['player'].get('full_name')} ({needed_pos}), vorp={round(best_needed['vorp'])}, urgency={round(needed_urgency)}, score={round(needed_score)}")
+        print(f"  winner: {best_v['player'].get('full_name')} ({best_pos}), score={round(best_score)}")
 
-    if overall_urgency > needed_urgency:
-        gap = best_overall["vorp"] - best_needed["vorp"]
-        return best_overall["player"], best_needed["player"], gap
+    if best_v["player"].get("full_name") != best_needed["player"].get("full_name"):
+        gap = best_v["vorp"] - best_needed["vorp"]
+        return best_v["player"], best_needed["player"], gap
 
     return None, best_needed["player"], 0
 
-def _bpa_decision_redraft_v2(best_overall, best_needed, urgency_scores):
-    """
-    Threshold-free BPA decision using urgency scores.
-
-    Instead of comparing VORP gap against an arbitrary threshold,
-    compare the urgency of best_overall's position against best_needed's
-    position. Take whichever position is more urgent.
-
-    If best_overall is at a more urgent position than best_needed,
-    take best_overall (BPA). Otherwise take best_needed (fill the need).
-
-    No threshold — urgency scores handle all cases naturally.
-    """
+def _bpa_decision_redraft_v2(best_overall, best_needed, urgency_scores, viable=None):
     if not best_overall:
         return None, None, 0
     if not best_needed:
         return None, best_overall["player"], 0
 
+    # Score each position by its best available player's VORP × urgency^modifier.
+    position_best = {}
+    if viable:
+        for v in viable:
+            pos = v["position"]
+            if pos not in position_best or v["vorp"] > position_best[pos]["vorp"]:
+                position_best[pos] = v
+
     overall_pos = best_overall["position"]
     needed_pos = best_needed["position"]
-
     overall_urgency = urgency_scores.get(overall_pos, 0)
     needed_urgency = urgency_scores.get(needed_pos, 0)
+    overall_score = best_overall["vorp"] * (overall_urgency ** URGENCY_MODIFIER)
+    needed_score = best_needed["vorp"] * (needed_urgency ** URGENCY_MODIFIER)
+
+    # Check if any other position scores higher than best_overall
+    best_pos = overall_pos
+    best_score = overall_score
+    best_v = best_overall
+    for pos, urgency in urgency_scores.items():
+        if pos in position_best:
+            score = position_best[pos]["vorp"] * (urgency ** URGENCY_MODIFIER)
+            if score > best_score:
+                best_score = score
+                best_pos = pos
+                best_v = position_best[pos]
 
     if DEV_MODE:
+        all_scores = sorted(
+            [(position_best[pos]["player"].get("full_name"), pos,
+              round(position_best[pos]["vorp"]),
+              round(urgency_scores.get(pos, 0)),
+              round(position_best[pos]["vorp"] * (urgency_scores.get(pos, 0) ** URGENCY_MODIFIER)))
+             for pos in position_best if pos in urgency_scores],
+            key=lambda x: x[4], reverse=True
+        )[:5]
         print(f"_bpa_decision_redraft_v2:")
-        print(f"  best_overall: {best_overall['player'].get('full_name')} ({overall_pos}), vorp={round(best_overall['vorp'])}, urgency={round(overall_urgency)}")
-        print(f"  best_needed: {best_needed['player'].get('full_name')} ({needed_pos}), vorp={round(best_needed['vorp'])}, urgency={round(needed_urgency)}")
+        print(f"  top scores: {all_scores}")
+        print(f"  best_needed: {best_needed['player'].get('full_name')} ({needed_pos}), vorp={round(best_needed['vorp'])}, urgency={round(needed_urgency)}, score={round(needed_score)}")
+        print(f"  winner: {best_v['player'].get('full_name')} ({best_pos}), score={round(best_score)}")
 
-    if overall_urgency > needed_urgency:
-        # best_overall's position is more urgent — BPA fires
-        gap = best_overall["vorp"] - best_needed["vorp"]
-        return best_overall["player"], best_needed["player"], gap
+    if best_v["player"].get("full_name") != best_needed["player"].get("full_name"):
+        gap = best_v["vorp"] - best_needed["vorp"]
+        return best_v["player"], best_needed["player"], gap
 
-    # best_needed's position is more urgent — fill the need
     return None, best_needed["player"], 0
 
 def _bpa_decision_redraft(best_overall, best_needed, threshold, best_needed_overall=None, needed_positions=None):
@@ -1617,9 +1642,9 @@ def calculate_bpa(available, league_context, all_players=None):
 
     # Step 7: Mode-specific BPA decision
     if is_dynasty:
-        return _bpa_decision_dynasty_v2(best_overall, best_needed, urgency_scores)
+        return _bpa_decision_dynasty_v2(best_overall, best_needed, urgency_scores, viable)
     else:
-        return _bpa_decision_redraft_v2(best_overall, best_needed, urgency_scores)
+        return _bpa_decision_redraft_v2(best_overall, best_needed, urgency_scores, viable)
 
 def calculate_confidence(recommendation_name, available, alternatives, is_dynasty=True):
     if is_dynasty:

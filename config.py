@@ -21,3 +21,9 @@ REDRAFT_THRESHOLD_QB = 2000
 REDRAFT_THRESHOLD_RB = 500
 REDRAFT_THRESHOLD_WR = 500
 REDRAFT_THRESHOLD_TE = 300
+# Urgency modifier for BPA decision scoring.
+# Controls how much positional urgency influences the pick recommendation
+# relative to raw VORP. Higher values favor urgent positions; lower values
+# favor pure VORP. Default 1.0 = equal weight.
+# This will eventually be tunable via the Draft Strategy Slider.
+URGENCY_MODIFIER = 1.0
