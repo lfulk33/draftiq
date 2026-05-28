@@ -118,6 +118,7 @@ def build_league_context(league_detail, draft_detail, my_roster, picks,
             }
         },
         "is_dynasty": is_dynasty,
+        "my_draft_slot": my_roster_id,  # placeholder, set properly below
         "bpa_threshold": BPA_THRESHOLD_DYNASTY if is_dynasty else BPA_THRESHOLD_REDRAFT,
         "value_type": "dynasty_value" if is_dynasty else "redraft_value",
         "value_key": "fc_value" if is_dynasty else "fc_redraft_value",
@@ -194,6 +195,7 @@ def _build_draft_state(draft_id, league_id, user_id):
         league_detail, draft_detail, my_roster, picks,
         my_roster_id, PLAYERS, my_draft_picks, is_dynasty, starter_ids
     )
+    league_context["my_draft_slot"] = my_slot
 
     # Identify taxi players using sim state so taxi badges show during draft
     if is_dynasty:
@@ -357,5 +359,6 @@ def api_recommend():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(debug=True,
-            host="0.0.0.0", port=port)
+    dev_mode = os.environ.get("DEV_MODE", "false").lower() == "true"
+    from werkzeug.serving import run_simple
+    run_simple('0.0.0.0', port, app, use_reloader=False, use_debugger=True)

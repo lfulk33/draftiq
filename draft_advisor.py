@@ -618,11 +618,11 @@ def calculate_replacement_levels(league_context, player_pool, value_key):
         else:
             replacement[pos] = 0
 
-    if DEV_MODE:
-        print(f"calculate_replacement_levels ({value_key}):")
-        print(f"  dedicated_cutoff: {dedicated_cutoff}")
-        print(f"  drafted_count after flex: {drafted_count}")
-        print(f"  replacement levels: {replacement}")
+    #if DEV_MODE:
+        #print(f"calculate_replacement_levels ({value_key}):")
+        #print(f"  dedicated_cutoff: {dedicated_cutoff}")
+        #print(f"  drafted_count after flex: {drafted_count}")
+        #print(f"  replacement levels: {replacement}")
 
     return replacement
 
@@ -659,10 +659,10 @@ def calculate_vorp(available, league_context, all_players=None):
     # Calculate replacement levels using competition-based simulation
     replacement = calculate_replacement_levels(league_context, player_pool, value_key)
 
-    if DEV_MODE:
-        print(f"calculate_vorp ({'dynasty' if is_dynasty else 'redraft'}):")
-        print(f"  available size: {len(available)}, pool size: {len(player_pool)}")
-        print(f"  replacement levels: {replacement}")
+    #if DEV_MODE:
+        #print(f"calculate_vorp ({'dynasty' if is_dynasty else 'redraft'}):")
+        #print(f"  available size: {len(available)}, pool size: {len(player_pool)}")
+        #print(f"  replacement levels: {replacement}")
 
     # Score every available player against replacement level
     vorp_players = []
@@ -832,46 +832,52 @@ def _build_sim_state(all_picks, league_context):
     return sim_active, sim_taxi
 
    
-def _calculate_scarcity(viable, picks_by_pos, league_context):
+def _calculate_urgency(viable, picks_by_pos, league_context):
     """
-    Determine the most urgently needed position using a scarcity score
-    that combines supply/demand with value drop-off.
+    Calculate how urgently each position needs to be addressed THIS pick.
 
-    Scarcity score for each position =
-        (slots_still_needed / players_still_available) * (1 + drop_off_ratio)
+    Combines two signals:
+      1. Opportunity cost: how much value do you lose by waiting one round?
+         = best_available_now[pos] - best_available_after_N_picks[pos]
+         where N = num_teams (picks until you pick again)
 
-    Where drop_off_ratio = (best_value - avg_rest) / (avg_rest + 1)
+      2. Scarcity ratio: how many positive-VORP players are left relative
+         to how many you still need?
+         = slots_still_needed / positive_vorp_players_left
 
-    This correctly captures two dimensions of urgency:
-      1. Supply/demand: if you need 2 QBs and only 3 are left, that's
-         more urgent than needing 2 WRs with 20 left.
-      2. Value drop-off: if Brock Bowers is available and the next TE
-         is worth half as much, TE scarcity score spikes — grab him now.
+    urgency = opportunity_cost * scarcity_ratio
 
-    Works identically for dynasty and redraft. The underlying values
-    differ (fc_value vs fc_redraft_value) but the math is the same.
+    This replaces threshold-based BPA entirely — positions are compared
+    directly by urgency score. No arbitrary threshold needed.
 
     Args:
-        viable:         list of {player, vorp, value, position} — players
-                        who would make the roster, sorted by vorp desc
+        viable:         list of {player, vorp, value, position} sorted by vorp desc
         picks_by_pos:   dict of {pos: count} from _count_picks_by_pos
         league_context: dict from build_league_context
 
     Returns:
-        most_needed_pos: string position with highest scarcity score,
-                         or None if all positions are at capacity
-        position_scarcity: dict of {pos: score} for debugging
+        most_urgent_pos: position with highest urgency score
+        urgency_scores:  dict of {pos: score} for debugging
     """
     is_dynasty = league_context.get("is_dynasty", True)
     dedicated = league_context.get("dedicated_slots", {})
     backup_needs = league_context.get("backup_needs", {})
     has_superflex = league_context.get("has_superflex", False)
+    num_teams = league_context.get("num_teams", 12)
+    my_draft_slot = league_context.get("my_draft_slot", 1) or 1
+    current_pick = sum(picks_by_pos.values()) + 1  # approximate current pick number
 
-    # In redraft, only count QB backups if the league has a Superflex slot.
-    # A backup QB has no lineup value in a 1-QB league.
+    # Calculate picks until your next turn based on draft slot and snake format.
+    # In a snake draft, if you're at slot S in a N-team league:
+    # - Odd rounds: you pick at position S, next turn is (N-S) + S = N picks away... 
+    # Actually: picks until next turn = (num_teams - my_draft_slot) + (my_draft_slot) = num_teams
+    # But at the turn (slot 1 or slot N): picks until next = num_teams * 2 - 1 or 1
+    # Simplification: picks_until_next = num_teams + (num_teams - 2 * my_draft_slot + 1).abs() 
+    picks_until_next = 2 * (num_teams - my_draft_slot) + 1
+
     effective_backup_needs = dict(backup_needs)
     if not is_dynasty and not has_superflex:
-        effective_backup_needs["QB"] = 0
+        effective_backup_needs["QB"] = 1  # allow 1 backup QB in non-superflex redraft
 
     # Positions where we still need more players
     needed_positions = [
@@ -882,65 +888,102 @@ def _calculate_scarcity(viable, picks_by_pos, league_context):
     if not needed_positions:
         return None, {}
 
-    # Count remaining viable players and their values by position
-    viable_by_pos = {}
-    viable_values_by_pos = {}
-    for v in viable:
-        pos = v["position"]
-        val = v["player"].get(
-            "fc_value" if is_dynasty else "fc_redraft_value", 0
-        ) or 0
-        viable_by_pos[pos] = viable_by_pos.get(pos, 0) + 1
-        viable_values_by_pos.setdefault(pos, []).append(val)
-
-    position_scarcity = {}
+    # Get best available player at each position right now
+    best_now = {}
     for pos in needed_positions:
+        best = next((v for v in viable if v["position"] == pos), None)
+        best_now[pos] = best["vorp"] if best else 0
+
+    # Simulate N picks happening (top N players by VORP get drafted)
+    # Use N = num_teams as approximation of picks until your next turn
+    top_n_players = [v["player"].get("full_name") for v in viable[:picks_until_next]]
+    viable_after = [v for v in viable if v["player"].get("full_name") not in top_n_players]
+
+    # Get best available player at each position after N picks
+    best_after = {}
+    for pos in needed_positions:
+        best = next((v for v in viable_after if v["position"] == pos), None)
+        best_after[pos] = best["vorp"] if best else 0
+
+    urgency_scores = {}
+    for pos in needed_positions:
+        # Opportunity cost: value lost by waiting
+        opportunity_cost = max(0, best_now[pos] - best_after[pos])
+
+        # Scarcity ratio: slots needed vs positive VORP players available
         slots_needed = (
             dedicated.get(pos, 0) +
             effective_backup_needs.get(pos, 0) -
             picks_by_pos.get(pos, 0)
         )
-        players_left = viable_by_pos.get(pos, 0)
-        values = viable_values_by_pos.get(pos, [0])
+        positive_vorp_players = len([v for v in viable if v["position"] == pos and v["vorp"] > 0])
 
-        if players_left == 0:
-            # No players left at this position — maximally scarce
-            position_scarcity[pos] = float('inf')
-            continue
+        if positive_vorp_players == 0:
+            # No positive VORP players left — position is fully depleted
+            scarcity_ratio = 0
+        else:
+            scarcity_ratio = slots_needed / positive_vorp_players
 
-        # Supply/demand ratio: how many slots per available player
-        supply_ratio = slots_needed / players_left
-
-        # Value drop-off: how much better is the best player vs the rest
-        # High drop-off means "grab him now or regret it"
-        # But drop-off matters much less for backup slots than starter slots —
-        # any startable player fills a backup need, so we reduce drop-off weight
-        # when dedicated starter slots are already filled.
-        best_val = max(values) if values else 0
-        rest_vals = values[1:] if len(values) > 1 else [0]
-        avg_rest = sum(rest_vals) / len(rest_vals) if rest_vals else 0
-        dropoff = (best_val - avg_rest) / (avg_rest + 1)
-
-        # Reduce drop-off weight for backup-only needs
+        # Reduce urgency for backup-only slots — any player fills them
         dedicated_filled = picks_by_pos.get(pos, 0) >= dedicated.get(pos, 0)
-        dropoff_weight = 0.2 if dedicated_filled else 1.0
+        backup_multiplier = 0.3 if dedicated_filled else 1.0
 
-        position_scarcity[pos] = supply_ratio * (1 + dropoff * dropoff_weight)
+        urgency_scores[pos] = opportunity_cost * scarcity_ratio * backup_multiplier
 
-    if not position_scarcity:
+        if DEV_MODE:
+            print(f"  {pos}: opp_cost={round(opportunity_cost)}, scarcity={round(scarcity_ratio,3)}, backup_mult={backup_multiplier}, urgency={round(urgency_scores[pos])}")
+
+    if not urgency_scores:
         return None, {}
 
-    most_needed_pos = max(position_scarcity, key=lambda p: position_scarcity[p])
+    most_urgent_pos = max(urgency_scores, key=lambda p: urgency_scores[p])
 
     if DEV_MODE:
-        print(f"_calculate_scarcity:")
+        print(f"_calculate_urgency:")
+        print(f"  my_draft_slot: {my_draft_slot}, num_teams: {num_teams}, picks_until_next: {picks_until_next}")
         print(f"  needed_positions: {needed_positions}")
         print(f"  picks_by_pos: {picks_by_pos}")
-        print(f"  position_scarcity: {position_scarcity}")
-        print(f"  most_needed_pos: {most_needed_pos}")
+        print(f"  urgency_scores: {urgency_scores}")
+        print(f"  most_urgent_pos: {most_urgent_pos}")
 
-    return most_needed_pos, position_scarcity
+    return most_urgent_pos, urgency_scores
 
+def _bpa_decision_redraft_v2(best_overall, best_needed, urgency_scores):
+    """
+    Threshold-free BPA decision using urgency scores.
+
+    Instead of comparing VORP gap against an arbitrary threshold,
+    compare the urgency of best_overall's position against best_needed's
+    position. Take whichever position is more urgent.
+
+    If best_overall is at a more urgent position than best_needed,
+    take best_overall (BPA). Otherwise take best_needed (fill the need).
+
+    No threshold — urgency scores handle all cases naturally.
+    """
+    if not best_overall:
+        return None, None, 0
+    if not best_needed:
+        return None, best_overall["player"], 0
+
+    overall_pos = best_overall["position"]
+    needed_pos = best_needed["position"]
+
+    overall_urgency = urgency_scores.get(overall_pos, 0)
+    needed_urgency = urgency_scores.get(needed_pos, 0)
+
+    if DEV_MODE:
+        print(f"_bpa_decision_redraft_v2:")
+        print(f"  best_overall: {best_overall['player'].get('full_name')} ({overall_pos}), vorp={round(best_overall['vorp'])}, urgency={round(overall_urgency)}")
+        print(f"  best_needed: {best_needed['player'].get('full_name')} ({needed_pos}), vorp={round(best_needed['vorp'])}, urgency={round(needed_urgency)}")
+
+    if overall_urgency > needed_urgency:
+        # best_overall's position is more urgent — BPA fires
+        gap = best_overall["vorp"] - best_needed["vorp"]
+        return best_overall["player"], best_needed["player"], gap
+
+    # best_needed's position is more urgent — fill the need
+    return None, best_needed["player"], 0
 
 def _bpa_decision_redraft(best_overall, best_needed, threshold, best_needed_overall=None, needed_positions=None):
     """
@@ -1427,8 +1470,8 @@ def calculate_bpa(available, league_context, all_players=None):
 
     if DEV_MODE:
         print(f"  sim_active: {len(sim_active)}, sim_taxi: {len(sim_taxi)}")
-        print(f"  sim_active players: {[(p.get('name'), p.get('position'), p.get('redraft_value')) for p in sim_active.values()]}")
-        print(f"  sim_taxi players: {[(p.get('name'), p.get('position'), p.get('redraft_value')) for p in sim_taxi.values()]}")
+       # print(f"  sim_active players: {[(p.get('name'), p.get('position'), p.get('redraft_value')) for p in sim_active.values()]}")
+       # print(f"  sim_taxi players: {[(p.get('name'), p.get('position'), p.get('redraft_value')) for p in sim_taxi.values()]}")
 
     # Step 3: Filter to players who would actually make the roster
     sorted_vorp = sorted(
@@ -1453,8 +1496,8 @@ def calculate_bpa(available, league_context, all_players=None):
     # Step 4: Count meaningful players at each position
     picks_by_pos = _count_picks_by_pos(sim_active, league_context)
 
-    # Step 5: Calculate positional scarcity
-    most_needed_pos, position_scarcity = _calculate_scarcity(
+    # Step 5: Calculate positional urgency (opportunity cost × scarcity)
+    most_needed_pos, urgency_scores = _calculate_urgency(
         viable, picks_by_pos, league_context
     )
 
@@ -1491,11 +1534,7 @@ def calculate_bpa(available, league_context, all_players=None):
             picks_by_pos=picks_by_pos
         )
     else:
-        redraft_needed = [
-            pos for pos in ["QB", "RB", "WR", "TE"]
-            if picks_by_pos.get(pos, 0) < league_context.get("dedicated_slots", {}).get(pos, 0) + league_context.get("backup_needs", {}).get(pos, 0)
-        ]
-        return _bpa_decision_redraft(best_overall, best_needed, threshold, best_needed_overall, needed_positions=redraft_needed)
+        return _bpa_decision_redraft_v2(best_overall, best_needed, urgency_scores)
 
 def calculate_confidence(recommendation_name, available, alternatives, is_dynasty=True):
     if is_dynasty:
