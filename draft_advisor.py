@@ -1478,9 +1478,8 @@ def calculate_bpa(available, league_context, all_players=None):
             # Backup slots are much less urgent than starter slots.
             # BPA needs a much larger gap to justify taking a backup over a starter need.
             over_dedicated = owned - dedicated_slots
-            threshold = threshold * (3 + (0.5 * over_dedicated))
-        elif owned > dedicated_slots:
-            threshold = threshold * (1 + (0.5 * (owned - dedicated_slots)))
+            threshold = threshold * (5 + (0.5 * over_dedicated))
+        
 
     if DEV_MODE:
         print(f"  scaled threshold: {threshold}")
