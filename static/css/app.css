@@ -700,6 +700,23 @@ body {
   margin-left: 4px;
 }
 
+.trade-bait-item {
+  border-left: 3px solid #f59e0b;
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.trade-bait-badge {
+  font-size: 10px;
+  font-weight: 700;
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid #f59e0b;
+  border-radius: 4px;
+  padding: 2px 6px;
+  letter-spacing: 0.05em;
+  margin-left: auto;
+}
+
 .starter-dot {
   display: inline-block;
   width: 5px;

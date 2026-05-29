@@ -374,10 +374,17 @@ def build_prompt(picks, available, my_roster, league_context, pick_number, all_p
     taxi_open = max(0, taxi_total - taxi_used) if is_dynasty else 0
     
     picks_remaining = league_context.get("picks_remaining_for_me", 0)
-    bpa_player, suggested_pick, bpa_gap = calculate_bpa(available, league_context, all_players)
+    bpa_player, suggested_pick, bpa_gap, trade_bait_player = calculate_bpa(available, league_context, all_players)
     if DEV_MODE:
         print(f"bpa_player: {bpa_player.get('full_name') if bpa_player else None}")
         print(f"suggested_pick: {suggested_pick.get('full_name') if suggested_pick else None}")
+        print(f"trade_bait_player: {trade_bait_player.get('full_name') if trade_bait_player else None}")
+        if bpa_player:
+            print(f"  → prompt will say MANDATORY: {bpa_player.get('full_name')}")
+        elif suggested_pick:
+            print(f"  → prompt will say SUGGESTED: {suggested_pick.get('full_name')}")
+        else:
+            print(f"  → prompt will say NO STRONG RECOMMENDATION")
     
     vorp_players, replacement, _, _ = calculate_vorp(available, league_context, all_players)
     # Count picks already made by position (this draft + existing roster)
@@ -446,8 +453,10 @@ NOTE: Use the ROSTER CONSTRUCTION DETAIL above to determine how many more player
 - When no MANDATORY RECOMMENDATION exists and dedicated starter slots are unfilled, recommend the highest VORP player at the most needed unfilled position.
 - When all dedicated starter slots are filled, recommend the highest VORP player overall from the TOP 10 AVAILABLE PLAYERS BY VORP list, regardless of position, unless that position already has starters filled AND at least {league_context.get("backup_needs", {}).get("QB", 1)} backups drafted.
 - A position is covered when its dedicated slots are filled. Flex slots provide additional value for covered positions.
+{f"- TRADE BAIT OPTION: {trade_bait_player.get('full_name')} ({trade_bait_player.get('position')}) is the highest dynasty value player on the board but your {trade_bait_player.get('position')} slots are full. You MUST mention him as a trade bait alternative in the alternatives list, framed as a dynasty value pick to flip for a needed position." if trade_bait_player and trade_bait_player.get('full_name') != (suggested_pick.get('full_name') if suggested_pick else None) else ""}
 
 {f"MANDATORY RECOMMENDATION: Draft {bpa_player.get('full_name')} ({bpa_player.get('position')}). Their VORP exceeds the best available at your most needed position by {bpa_gap} points. You MUST recommend this player." if bpa_player else (f"SUGGESTED PICK: {suggested_pick.get('full_name')} ({suggested_pick.get('position')}). This is the highest VORP player at your most pressing need. Recommend this player unless you have a very strong reason not to." if suggested_pick else "NO STRONG RECOMMENDATION: Your roster is at capacity. All remaining available players are below replacement level or would be cut. Consider skipping this pick or taking the highest dynasty value player available for trade bait.")}
+{f"TRADE BAIT ALERT: {trade_bait_player.get('full_name')} ({trade_bait_player.get('position')}) is the highest dynasty value player on the board but your {trade_bait_player.get('position')} slots are full. Consider drafting him to trade for a needed position." if trade_bait_player and trade_bait_player.get('full_name') != (suggested_pick.get('full_name') if suggested_pick else None) and trade_bait_player.get('full_name') != (bpa_player.get('full_name') if bpa_player else None) else ""}
 For alternatives, provide at least 1 player from each position (QB, RB, WR, TE) and no more than 2 from any single position. Use this list — pick the highest VORP player at each position as the alternative unless you have a strong positional reason to prefer the second. Do not suggest players not on this list:
 
 TOP ALTERNATIVES BY POSITION (use these, in order):
@@ -462,7 +471,8 @@ Respond with this exact JSON structure:
     "upside": "Brief note on dynasty ceiling",
     "alternatives": [
         {{"name": "Player Name", "position": "POS", "reason": "One sentence why they are the alternative"}}
-    ]
+    ],
+    "trade_bait": {f'{{"name": "{trade_bait_player.get("full_name")}", "position": "{trade_bait_player.get("position")}", "reason": "This is the highest dynasty value player on the board. Your {trade_bait_player.get("position")} slots are full but he is worth drafting to trade for a position of need."}}' if trade_bait_player and trade_bait_player.get("full_name") != (suggested_pick.get("full_name") if suggested_pick else None) and trade_bait_player.get("full_name") != (bpa_player.get("full_name") if bpa_player else None) else "null"}
 }}"""
     return prompt
 
@@ -818,7 +828,24 @@ def _build_sim_state(all_picks, league_context):
 
     return sim_active, sim_taxi
 
-   
+def _has_active_redraft_viable(pos, viable_active):
+    """
+    Returns True if any active-bound player at this position has enough
+    redraft value to contribute to the active roster.
+    Used to determine if urgency should remain active for a position.
+    """
+    taxi_thresholds = {
+        "QB": TAXI_THRESHOLD_QB,
+        "RB": TAXI_THRESHOLD_RB,
+        "WR": TAXI_THRESHOLD_WR,
+        "TE": TAXI_THRESHOLD_TE,
+    }
+    threshold = taxi_thresholds.get(pos, 100)
+    return any(
+        v["position"] == pos and v["player"].get("fc_redraft_value", 0) >= threshold
+        for v in viable_active
+    )
+
 def _calculate_urgency(viable, picks_by_pos, league_context, drafted_count=None, dedicated_cutoff=None, sim_taxi=None):
     """
     Calculate how urgently each position needs to be addressed THIS pick.
@@ -896,6 +923,13 @@ def _calculate_urgency(viable, picks_by_pos, league_context, drafted_count=None,
             print(f"  needed check {pos}: have={have}, need={round(total,2)} (dedicated={dedicated.get(pos,0)}, backup={effective_backup_needs.get(pos,0)}, flex={round(fd,2)})")
         if have < total:
             needed_positions.append(pos)
+
+    # Remove positions where no active-bound redraft-viable players remain.
+    # They still compete on raw dynasty value in the decision function.
+    needed_positions = [
+        pos for pos in needed_positions
+        if _has_active_redraft_viable(pos, [v for v in viable if v.get("placement") != "TAXI"])
+    ]
 
     if not needed_positions:
         return None, {}
@@ -1015,29 +1049,32 @@ def _bpa_decision_dynasty_v2(best_overall, best_needed, urgency_scores, viable=N
 
     overall_pos = best_overall["position"]
     needed_pos = best_needed["position"]
-    overall_urgency = urgency_scores.get(overall_pos, 0)
-    needed_urgency = urgency_scores.get(needed_pos, 0)
+    overall_urgency = urgency_scores.get(overall_pos, 1)
+    needed_urgency = urgency_scores.get(needed_pos, 1)
     overall_score = best_overall["vorp"] * (overall_urgency ** URGENCY_MODIFIER)
     needed_score = best_needed["vorp"] * (needed_urgency ** URGENCY_MODIFIER)
 
-    # Check if any other position scores higher than best_overall
+    # Check all positions — use urgency=1 for positions not in urgency_scores
+    # (taxi-bound only positions compete on raw dynasty value)
     best_pos = overall_pos
     best_score = overall_score
     best_v = best_overall
-    for pos, urgency in urgency_scores.items():
-        if pos in position_best:
-            score = position_best[pos]["vorp"] * (urgency ** URGENCY_MODIFIER)
-            if score > best_score:
-                best_score = score
-                best_pos = pos
-                best_v = position_best[pos]
+    for pos, v in position_best.items():
+        urgency = urgency_scores.get(pos, 1)
+        score = v["vorp"] * (urgency ** URGENCY_MODIFIER)
+        if score > best_score:
+            best_score = score
+            best_pos = pos
+            best_v = v
 
     if DEV_MODE:
         all_scores = sorted(
             [(position_best[pos]["player"].get("full_name"), pos,
               round(position_best[pos]["vorp"]),
               round(urgency_scores.get(pos, 0)),
-              round(position_best[pos]["vorp"] * (urgency_scores.get(pos, 0) ** URGENCY_MODIFIER)))
+              round(position_best[pos]["vorp"] * (urgency_scores.get(pos, 0) ** URGENCY_MODIFIER)),
+              position_best[pos]["player"].get("fc_redraft_value", 0),
+              position_best[pos].get("placement", "?"))
              for pos in position_best if pos in urgency_scores],
             key=lambda x: x[4], reverse=True
         )[:5]
@@ -1046,9 +1083,15 @@ def _bpa_decision_dynasty_v2(best_overall, best_needed, urgency_scores, viable=N
         print(f"  best_needed: {best_needed['player'].get('full_name')} ({needed_pos}), vorp={round(best_needed['vorp'])}, urgency={round(needed_urgency)}, score={round(needed_score)}")
         print(f"  winner: {best_v['player'].get('full_name')} ({best_pos}), score={round(best_score)}")
 
-    # Only fire BPA if winner has a meaningful score and is different from best_needed
-    if (best_score > 0 and
-            best_v["player"].get("full_name") != best_needed["player"].get("full_name")):
+    if best_score <= 0:
+        # All scores negative — no urgency-based pick makes sense.
+        # Take best dynasty value overall regardless of placement.
+        best_dynasty = viable[0] if viable else None
+        if DEV_MODE:
+            print(f"  all scores negative — taking best dynasty value: {best_dynasty['player'].get('full_name') if best_dynasty else None}")
+        return None, best_dynasty["player"] if best_dynasty else None, 0
+
+    if best_v["player"].get("full_name") != best_needed["player"].get("full_name"):
         gap = best_v["vorp"] - best_needed["vorp"]
         return best_v["player"], best_needed["player"], gap
 
@@ -1092,7 +1135,9 @@ def _bpa_decision_redraft_v2(best_overall, best_needed, urgency_scores, viable=N
             [(position_best[pos]["player"].get("full_name"), pos,
               round(position_best[pos]["vorp"]),
               round(urgency_scores.get(pos, 0)),
-              round(position_best[pos]["vorp"] * (urgency_scores.get(pos, 0) ** URGENCY_MODIFIER)))
+              round(position_best[pos]["vorp"] * (urgency_scores.get(pos, 0) ** URGENCY_MODIFIER)),
+              position_best[pos]["player"].get("fc_redraft_value", 0),
+              position_best[pos].get("placement", "?"))
              for pos in position_best if pos in urgency_scores],
             key=lambda x: x[4], reverse=True
         )[:5]
@@ -1607,7 +1652,7 @@ def calculate_bpa(available, league_context, all_players=None):
     vorp_players, replacement, drafted_count, dedicated_cutoff = calculate_vorp(available, league_context, all_players)
     
     if not vorp_players:
-        return None, None, None
+        return None, None, None, None
 
     # Step 2: Build simulated roster state from all picks made so far
     all_picks = (
@@ -1635,12 +1680,10 @@ def calculate_bpa(available, league_context, all_players=None):
         print(f"  top 5 viable: {[(v['player'].get('full_name'), v['position'], round(v['vorp'])) for v in viable[:5]]}")
 
     if not viable:
-        # No viable picks — all remaining players would be cut
-        # Return highest VORP player anyway so Claude can explain the situation
         if vorp_players:
             best = max(vorp_players, key=lambda x: x["vorp"])
-            return None, best["player"], 0
-        return None, None, None
+            return None, best["player"], 0, None
+        return None, None, None, None
 
     # Step 4: Count meaningful players at each position
     picks_by_pos = _count_picks_by_pos(sim_active, league_context)
@@ -1679,11 +1722,36 @@ def calculate_bpa(available, league_context, all_players=None):
     if DEV_MODE:
         print(f"  scaled threshold: {threshold}")
 
+    # Check if best overall dynasty value player is at an at-capacity position.
+    # Surface him as trade bait — won't win via urgency but worth flagging.
+    trade_bait_player = None
+    if viable:
+        best_dynasty = viable[0]
+        best_dynasty_pos = best_dynasty["position"]
+        at_capacity = picks_by_pos.get(best_dynasty_pos, 0) >= (
+            dedicated.get(best_dynasty_pos, 0) +
+            league_context.get("backup_needs", {}).get(best_dynasty_pos, 0) +
+            (drafted_count.get(best_dynasty_pos, 0) - dedicated_cutoff.get(best_dynasty_pos, 0)) / league_context.get("num_teams", 12)
+        )
+        if at_capacity:
+            trade_bait_player = best_dynasty["player"]
+            if DEV_MODE:
+                print(f"  trade_bait_player: {trade_bait_player.get('full_name')} ({best_dynasty_pos})")
+
+    # If no urgency scores — all active needs met or no active-bound redraft-viable
+    # players remain. Take best dynasty value regardless of placement.
+    if not urgency_scores:
+        if DEV_MODE:
+            print(f"  no urgency scores — taking best dynasty value: {viable[0]['player'].get('full_name') if viable else None}")
+        return None, viable[0]["player"] if viable else None, 0, trade_bait_player
+
     # Step 7: Mode-specific BPA decision
     if is_dynasty:
-        return _bpa_decision_dynasty_v2(best_overall, best_needed, urgency_scores, viable)
+        bpa_player, suggested_pick, gap = _bpa_decision_dynasty_v2(best_overall, best_needed, urgency_scores, viable)
     else:
-        return _bpa_decision_redraft_v2(best_overall, best_needed, urgency_scores, viable)
+        bpa_player, suggested_pick, gap = _bpa_decision_redraft_v2(best_overall, best_needed, urgency_scores, viable)
+
+    return bpa_player, suggested_pick, gap, trade_bait_player
 
 def calculate_confidence(recommendation_name, available, alternatives, is_dynasty=True):
     if is_dynasty:

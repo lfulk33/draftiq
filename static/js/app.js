@@ -386,7 +386,7 @@ function renderRecommendation(rec) {
   $('rec-meta').style.visibility = 'visible';
   document.querySelector('.rec-conf').style.visibility = 'visible';
   $('rec-reasoning').style.visibility = 'visible';
-  renderAlternatives(rec.alternatives || []);
+  renderAlternatives(rec.alternatives || [], rec.trade_bait);
   renderRoster();
   renderNotes(rec);
 
@@ -406,13 +406,28 @@ function getPlayerTeamFromAvailable(name, draftData) {
   return state.recommendation?.team || null;
 }
 
-function renderAlternatives(alts) {
+function renderAlternatives(alts, tradeBait) {
   const list = $('alts-list');
   list.innerHTML = '';
 
-  if (!alts.length) {
+  if (!alts.length && !tradeBait) {
     list.innerHTML = '<p class="alts-empty">Tap Get Recommendation to see suggestions for this pick.</p>';
     return;
+  }
+
+  // Trade bait card — always first if present
+  if (tradeBait && tradeBait.name) {
+    const item = document.createElement('div');
+    item.className = 'alt-item trade-bait-item';
+    item.innerHTML = `
+      <div class="alt-top">
+        <span class="alt-name">${tradeBait.name}</span>
+        ${tradeBait.position ? `<span class="alt-pos">${tradeBait.position}</span>` : ''}
+        <span class="trade-bait-badge">TRADE BAIT</span>
+      </div>
+      <div class="alt-reason">${tradeBait.reason || 'Highest dynasty value on the board. Your position slots are full — draft him to trade for a position of need.'}</div>
+    `;
+    list.appendChild(item);
   }
 
   alts.forEach(alt => {
