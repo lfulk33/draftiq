@@ -386,7 +386,7 @@ function renderRecommendation(rec) {
   $('rec-meta').style.visibility = 'visible';
   document.querySelector('.rec-conf').style.visibility = 'visible';
   $('rec-reasoning').style.visibility = 'visible';
-  renderAlternatives(rec.alternatives || [], rec.trade_bait);
+  renderAlternatives(rec.alternatives || [], rec.trade_bait || []);
   renderRoster();
   renderNotes(rec);
 
@@ -415,22 +415,27 @@ function renderAlternatives(alts, tradeBait) {
     return;
   }
 
-  // Trade bait card — always first if present
-  if (tradeBait && tradeBait.name) {
+  // Trade bait cards — always first if present
+  const tradeBaitArr = Array.isArray(tradeBait) ? tradeBait : (tradeBait ? [tradeBait] : []);
+  tradeBaitArr.forEach(tb => {
+    if (!tb || !tb.name) return;
     const item = document.createElement('div');
     item.className = 'alt-item trade-bait-item';
+    const badgeLabel = tb.type === 'redraft' ? 'TRADE BAIT · REDRAFT' : 'TRADE BAIT · DYNASTY';
     item.innerHTML = `
       <div class="alt-top">
-        <span class="alt-name">${tradeBait.name}</span>
-        ${tradeBait.position ? `<span class="alt-pos">${tradeBait.position}</span>` : ''}
-        <span class="trade-bait-badge">TRADE BAIT</span>
+        <span class="alt-name">${tb.name}</span>
+        ${tb.position ? `<span class="alt-pos">${tb.position}</span>` : ''}
+        <span class="trade-bait-badge">${badgeLabel}</span>
       </div>
-      <div class="alt-reason">${tradeBait.reason || 'Highest dynasty value on the board. Your position slots are full — draft him to trade for a position of need.'}</div>
+      <div class="alt-reason">${tb.reason || 'Best available at a full position — worth drafting to trade for a positional need.'}</div>
     `;
     list.appendChild(item);
-  }
+  });
 
+  const tradeBaitNames = new Set(tradeBaitArr.map(tb => tb.name));
   alts.forEach(alt => {
+    if (tradeBaitNames.has(alt.name)) return;
     const item = document.createElement('div');
     item.className = 'alt-item';
     item.innerHTML = `
