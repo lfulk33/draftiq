@@ -819,7 +819,7 @@ def _build_sim_state(all_picks, league_context):
     return sim_active, sim_taxi
 
    
-def _calculate_urgency(viable, picks_by_pos, league_context, drafted_count=None, dedicated_cutoff=None):
+def _calculate_urgency(viable, picks_by_pos, league_context, drafted_count=None, dedicated_cutoff=None, sim_taxi=None):
     """
     Calculate how urgently each position needs to be addressed THIS pick.
 
@@ -876,8 +876,6 @@ def _calculate_urgency(viable, picks_by_pos, league_context, drafted_count=None,
     picks_until_next = 2 * (num_teams - 1)
 
     effective_backup_needs = dict(backup_needs)
-    if not is_dynasty and not has_superflex:
-        effective_backup_needs["QB"] = 1  # allow 1 backup QB in non-superflex redraft
 
     flex_slot_counts = league_context.get("flex_slot_counts", {})
 
@@ -901,19 +899,32 @@ def _calculate_urgency(viable, picks_by_pos, league_context, drafted_count=None,
 
     if not needed_positions:
         return None, {}
+        
+    # Split viable into active-bound and taxi-bound players.
+    # Only use active-bound players for urgency — taxi stashes don't fill
+    # active roster needs and recommending them creates an infinite loop.
+    taxi_slots_total = league_context.get("taxi_slots_total", 0) or 0
+    if taxi_slots_total > 0:
+        viable_active = [v for v in viable if v.get("placement") != "TAXI"]
+        viable_taxi = [v for v in viable if v.get("placement") == "TAXI"]
+    else:
+        viable_active = viable
+        viable_taxi = []
 
-    # Get best available player at each position right now
+    if DEV_MODE:
+        print(f"  viable_active: {len(viable_active)}, viable_taxi: {len(viable_taxi)}")
+    # Get best available ACTIVE player at each position right now
     best_now = {}
     for pos in needed_positions:
-        best = next((v for v in viable if v["position"] == pos), None)
+        best = next((v for v in viable_active if v["position"] == pos), None)
         best_now[pos] = best["vorp"] if best else 0
 
     # Simulate N picks happening (top N players by VORP get drafted)
     # Use N = num_teams as approximation of picks until your next turn
-    top_n_players = [v["player"].get("full_name") for v in viable[:picks_until_next]]
-    viable_after = [v for v in viable if v["player"].get("full_name") not in top_n_players]
+    top_n_players = [v["player"].get("full_name") for v in viable_active[:picks_until_next]]
+    viable_after = [v for v in viable_active if v["player"].get("full_name") not in top_n_players]
 
-    # Get best available player at each position after N picks
+    # Get best available ACTIVE player at each position after N picks
     best_after = {}
     for pos in needed_positions:
         best = next((v for v in viable_after if v["position"] == pos), None)
@@ -951,8 +962,8 @@ def _calculate_urgency(viable, picks_by_pos, league_context, drafted_count=None,
         # Count all available players, not just positive VORP ones.
         # A position with only negative VORP players is still scarce —
         # the pool is depleted and getting worse each round.
-        all_players_at_pos = len([v for v in viable if v["position"] == pos])
-        positive_vorp_players = len([v for v in viable if v["position"] == pos and v["vorp"] > 0])
+        all_players_at_pos = len([v for v in viable_active if v["position"] == pos])
+        positive_vorp_players = len([v for v in viable_active if v["position"] == pos and v["vorp"] > 0])
 
         if all_players_at_pos == 0:
             # No players left at this position at all
@@ -971,8 +982,6 @@ def _calculate_urgency(viable, picks_by_pos, league_context, drafted_count=None,
 
         if DEV_MODE:
             print(f"  {pos}: opp_cost={round(opportunity_cost)}, scarcity={round(scarcity_ratio,3)}, backup_mult={backup_multiplier}, urgency={round(urgency_scores[pos])}, slots_needed={round(slots_needed,2)}, flex_demand={round(flex_demand,2)}, pos_vorp_players={positive_vorp_players}")
-            print(f"_calculate_urgency:")
-            print(f"  needed_positions: {needed_positions}")
 
     if not urgency_scores:
         return None, {}
@@ -1312,7 +1321,7 @@ def _bpa_decision_dynasty(best_overall, best_needed, viable, sim_taxi,
         return None, best_needed["player"], gap
 
 
-def _find_candidates(viable, most_needed_pos, picks_by_pos, league_context, drafted_count=None, dedicated_cutoff=None):
+def _find_candidates(viable, most_needed_pos, picks_by_pos, league_context, drafted_count=None, dedicated_cutoff=None, sim_taxi=None):
     """
     Find the two key players for the BPA decision:
       - best_needed: highest VORP player at the most needed position
@@ -1340,9 +1349,14 @@ def _find_candidates(viable, most_needed_pos, picks_by_pos, league_context, draf
     has_superflex = league_context.get("has_superflex", False)
 
     effective_backup_needs = dict(backup_needs)
-    if not is_dynasty and not has_superflex:
-        effective_backup_needs["QB"] = 1
 
+    # Only consider active-bound players for positional need decisions
+    taxi_slots_total = league_context.get("taxi_slots_total", 0) or 0
+    if taxi_slots_total > 0:
+        viable_active = [v for v in viable if v.get("placement") != "TAXI"]
+    else:
+        viable_active = viable
+        
     flex_slot_counts = league_context.get("flex_slot_counts", {})
     at_capacity_positions = [
         pos for pos in ["QB", "RB", "WR", "TE"]
@@ -1379,19 +1393,18 @@ def _find_candidates(viable, most_needed_pos, picks_by_pos, league_context, draf
             needed_positions.append(pos)
     # Best player at any needed position by VORP
     best_needed_overall = next(
-        (v for v in viable if v["position"] in needed_positions),
+        (v for v in viable_active if v["position"] in needed_positions),
         None
     )
-    # Best player at the MOST SCARCE needed position (for when BPA doesn't fire)
     best_needed_scarce = next(
-        (v for v in viable if v["position"] == most_needed_pos),
+        (v for v in viable_active if v["position"] == most_needed_pos),
         best_needed_overall
     ) if most_needed_pos else best_needed_overall
 
     # Use best_needed_overall for BPA threshold comparison,
     # best_needed_scarce as the actual recommendation when BPA doesn't fire
     # Best player overall by VORP — defined here so it's available for comparison below
-    best_overall = viable[0] if viable else None
+    best_overall = viable_active[0] if viable_active else None
 
     # Use scarcity-based pick only if it's within reasonable range of best overall need.
     # If the scarce position player is dramatically worse by VORP, use the overall best instead.
@@ -1451,26 +1464,8 @@ def _count_picks_by_pos(sim_active, league_context):
 
 def _filter_viable(sorted_vorp, sim_active, sim_taxi, league_context):
     """
-    Filter the VORP-sorted player list down to only players who would
-    actually make the roster — i.e. not be immediately cut.
-
-    Runs each candidate through simulate_placement against the current
-    sim state. Players who would be CUT are excluded. This prevents the
-    BPA logic from recommending players who have no roster spot.
-
-    Identical for dynasty and redraft — simulate_placement handles the
-    mode differences internally based on taxi_slots_total.
-
-    Args:
-        sorted_vorp:    list of {player, vorp, value, position} sorted by
-                        vorp descending, from calculate_vorp
-        sim_active:     dict of {player_id: player} on active roster
-        sim_taxi:       dict of {player_id: player} on taxi squad
-        league_context: dict from build_league_context
-
-    Returns:
-        list of viable player dicts in same format as sorted_vorp,
-        with CUT players removed
+    Filter VORP-sorted players to those who would make the roster.
+    Returns viable list with placement tag added to each entry.
     """
     viable = []
     for v in sorted_vorp:
@@ -1486,7 +1481,10 @@ def _filter_viable(sorted_vorp, sim_active, sim_taxi, league_context):
         }
         placement, _ = simulate_placement(candidate, sim_active, sim_taxi, league_context)
         if placement != "CUT":
-            viable.append(v)
+            viable.append({**v, "placement": placement})
+            if DEV_MODE and candidate.get("name") == "Antonio Williams":
+                active_capacity = sum(1 for s in league_context.get('roster_positions', []) if s not in ['K', 'DEF'])
+                print(f"  Williams placement: {placement}, active_capacity={active_capacity}, sim_active_size={len(sim_active)}, redraft={candidate.get('redraft_value')}")
     return viable
 
 
@@ -1519,10 +1517,26 @@ def simulate_placement(candidate, sim_active, sim_taxi, league_context):
         if p.get("id") == candidate.get("id")
     )
     
+    # Check if player should go to taxi based on redraft value threshold,
+    # even if active roster has space. Low redraft value + taxi eligible =
+    # developmental stash, not active roster contributor.
+    taxi_thresholds = {
+        "QB": TAXI_THRESHOLD_QB,
+        "RB": TAXI_THRESHOLD_RB,
+        "WR": TAXI_THRESHOLD_WR,
+        "TE": TAXI_THRESHOLD_TE,
+    }
+    pos = candidate.get("position", "?")
+    redraft_val = candidate.get("redraft_value", 0) or 0
+    below_threshold = redraft_val < taxi_thresholds.get(pos, 100)
+
     if candidate_rank <= active_capacity:
         # Candidate fits on active roster
         if len(sim_active) < active_capacity:
             # Active roster not full, no cuts needed
+            # But if below redraft threshold and taxi eligible, route to taxi
+            if taxi_eligible and below_threshold and len(sim_taxi) < taxi_slots_total:
+                return "TAXI", None
             if candidate_rank == 1:
                 return "STARTER", None
             return "ACTIVE_BENCH", None
@@ -1604,6 +1618,7 @@ def calculate_bpa(available, league_context, all_players=None):
 
     if DEV_MODE:
         print(f"  sim_active: {len(sim_active)}, sim_taxi: {len(sim_taxi)}")
+        print(f"  sim_taxi contents: {[(p.get('name'), p.get('position')) for p in sim_taxi.values()]}")
        # print(f"  sim_active players: {[(p.get('name'), p.get('position'), p.get('redraft_value')) for p in sim_active.values()]}")
        # print(f"  sim_taxi players: {[(p.get('name'), p.get('position'), p.get('redraft_value')) for p in sim_taxi.values()]}")
 
@@ -1635,12 +1650,12 @@ def calculate_bpa(available, league_context, all_players=None):
         print(f"  drafted_count before urgency: {drafted_count}")
         print(f"  dedicated_cutoff before urgency: {dedicated_cutoff}")
     most_needed_pos, urgency_scores = _calculate_urgency(
-        viable, picks_by_pos, league_context, drafted_count, dedicated_cutoff
+        viable, picks_by_pos, league_context, drafted_count, dedicated_cutoff, sim_taxi
     )
 
     # Step 6: Find the two key candidates
     best_needed, best_overall, best_needed_overall = _find_candidates(
-        viable, most_needed_pos, picks_by_pos, league_context, drafted_count, dedicated_cutoff
+        viable, most_needed_pos, picks_by_pos, league_context, drafted_count, dedicated_cutoff, sim_taxi
     )
 
     # Scale threshold based on how many players we have over dedicated slots
