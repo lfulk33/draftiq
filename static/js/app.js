@@ -25,6 +25,12 @@ function showScreen(name) {
   const screen = document.getElementById(`screen-${name}`);
   screen.classList.remove('hidden');
   screen.classList.add('active');
+
+  if (name === 'draft') {
+    document.querySelector('.sticky-footer').classList.remove('hidden');
+  } else {
+    document.querySelector('.sticky-footer').classList.add('hidden');
+  }
 }
 
 function formatPickNum(round, slot) {
@@ -315,6 +321,8 @@ async function getRecommendation() {
     });
 
     const rec = await res.json();
+    console.log('raw rec:', JSON.stringify(rec, null, 2));
+    if (rec.trace) console.error('Server traceback:', rec.trace);
     if (res.status === 409) {
       // Board changed during recommendation — refresh and retry once automatically
       await loadDraft();
@@ -337,6 +345,7 @@ async function getRecommendation() {
       return;
     }
     if (rec.error) throw new Error(rec.error);
+    console.log('rec:', JSON.stringify(rec, null, 2));
 
     state.recommendation = rec;
     renderRecommendation(rec);

@@ -1032,6 +1032,8 @@ def _calculate_urgency(viable, picks_by_pos, league_context, drafted_count=None,
         # Reduce urgency for backup-only slots — any player fills them
         dedicated_filled = picks_by_pos.get(pos, 0) >= dedicated.get(pos, 0)
         backup_multiplier = 0.3 if dedicated_filled else 1.0
+        if DEV_MODE:
+            print(f"  {pos}: dedicated_filled={dedicated_filled}, picks={picks_by_pos.get(pos,0)}, dedicated={dedicated.get(pos,0)}, backup_mult={backup_multiplier}")
 
         urgency_scores[pos] = opportunity_cost * (1 + scarcity_ratio) * backup_multiplier
 
@@ -1059,8 +1061,6 @@ def _bpa_decision_dynasty_v2(best_overall, best_needed, urgency_scores, viable=N
     if not best_needed:
         return None, best_overall["player"], 0
 
-    # Score each position by its best available player's VORP × urgency^modifier.
-    # Using all viable players ensures we don't miss #2 VORP at a more urgent position.
     position_best = {}
     if viable:
         for v in viable:
@@ -1080,7 +1080,6 @@ def _bpa_decision_dynasty_v2(best_overall, best_needed, urgency_scores, viable=N
         else:
             adjusted = vorp - min_vorp
             return adjusted * (urgency ** URGENCY_MODIFIER)
-
 
     overall_score = calc_score(best_overall["vorp"], overall_urgency)
     needed_score = calc_score(best_needed["vorp"], needed_urgency)
@@ -1111,6 +1110,10 @@ def _bpa_decision_dynasty_v2(best_overall, best_needed, urgency_scores, viable=N
         print(f"  top scores: {all_scores}")
         print(f"  best_needed: {best_needed['player'].get('full_name')} ({needed_pos}), vorp={round(best_needed['vorp'])}, urgency={round(needed_urgency)}, score={round(needed_score)}")
         print(f"  winner: {best_v['player'].get('full_name')} ({best_pos}), score={round(best_score)}")
+        for pos, v in position_best.items():
+            urgency = urgency_scores.get(pos, 1)
+            sc = calc_score(v["vorp"], urgency)
+            print(f"  position_best {pos}: {v['player'].get('full_name')}, vorp={round(v['vorp'])}, urgency={round(urgency)}, score={round(sc)}, placement={v.get('placement')}")
 
     if best_v["player"].get("full_name") != best_needed["player"].get("full_name"):
         gap = best_v["vorp"] - best_needed["vorp"]
@@ -1141,7 +1144,7 @@ def _bpa_decision_redraft_v2(best_overall, best_needed, urgency_scores, viable=N
         if vorp >= 0:
             return vorp * (urgency ** URGENCY_MODIFIER)
         else:
-            adjusted = vorp - min_vorp  # shift only when negative
+            adjusted = vorp - min_vorp
             return adjusted * (urgency ** URGENCY_MODIFIER)
 
     overall_score = calc_score(best_overall["vorp"], overall_urgency)
@@ -1163,7 +1166,7 @@ def _bpa_decision_redraft_v2(best_overall, best_needed, urgency_scores, viable=N
             [(position_best[pos]["player"].get("full_name"), pos,
               round(position_best[pos]["vorp"]),
               round(urgency_scores.get(pos, 0)),
-              round(position_best[pos]["vorp"] * (urgency_scores.get(pos, 0) ** URGENCY_MODIFIER)),
+              round(calc_score(position_best[pos]["vorp"], urgency_scores.get(pos, 0))),
               position_best[pos]["player"].get("fc_redraft_value", 0),
               position_best[pos].get("placement", "?"))
              for pos in position_best if pos in urgency_scores],
@@ -1173,6 +1176,10 @@ def _bpa_decision_redraft_v2(best_overall, best_needed, urgency_scores, viable=N
         print(f"  top scores: {all_scores}")
         print(f"  best_needed: {best_needed['player'].get('full_name')} ({needed_pos}), vorp={round(best_needed['vorp'])}, urgency={round(needed_urgency)}, score={round(needed_score)}")
         print(f"  winner: {best_v['player'].get('full_name')} ({best_pos}), score={round(best_score)}")
+        for pos, v in position_best.items():
+            urgency = urgency_scores.get(pos, 1)
+            sc = calc_score(v["vorp"], urgency)
+            print(f"  position_best {pos}: {v['player'].get('full_name')}, vorp={round(v['vorp'])}, urgency={round(urgency)}, score={round(sc)}, placement={v.get('placement')}")
 
     if best_v["player"].get("full_name") != best_needed["player"].get("full_name"):
         gap = best_v["vorp"] - best_needed["vorp"]
@@ -1572,9 +1579,6 @@ def _filter_viable(sorted_vorp, sim_active, sim_taxi, league_context):
         placement, _ = simulate_placement(candidate, sim_active, sim_taxi, league_context)
         if placement != "CUT":
             viable.append({**v, "placement": placement})
-            if DEV_MODE and candidate.get("name") == "Antonio Williams":
-                active_capacity = sum(1 for s in league_context.get('roster_positions', []) if s not in ['K', 'DEF'])
-                print(f"  Williams placement: {placement}, active_capacity={active_capacity}, sim_active_size={len(sim_active)}, redraft={candidate.get('redraft_value')}")
     return viable
 
 
@@ -1708,9 +1712,6 @@ def calculate_bpa(available, league_context, all_players=None):
 
     if DEV_MODE:
         print(f"  sim_active: {len(sim_active)}, sim_taxi: {len(sim_taxi)}")
-        print(f"  sim_taxi contents: {[(p.get('name'), p.get('position')) for p in sim_taxi.values()]}")
-       # print(f"  sim_active players: {[(p.get('name'), p.get('position'), p.get('redraft_value')) for p in sim_active.values()]}")
-       # print(f"  sim_taxi players: {[(p.get('name'), p.get('position'), p.get('redraft_value')) for p in sim_taxi.values()]}")
 
     # Step 3: Filter to players who would actually make the roster
     sorted_vorp = sorted(
@@ -1777,34 +1778,6 @@ def calculate_bpa(available, league_context, all_players=None):
             (drafted_count.get(pos, 0) - dedicated_cutoff.get(pos, 0)) / league_context.get("num_teams", 12)
         )
 
-    # Dynasty trade bait — best fc_value at a full position
-    if is_dynasty and viable:
-        best_dynasty = max(viable, key=lambda v: v["player"].get("fc_value", 0) or 0)
-        if is_at_capacity(best_dynasty["position"]):
-            trade_bait_players.append({
-                "name": best_dynasty["player"].get("full_name"),
-                "position": best_dynasty["position"],
-                "type": "dynasty",
-                "player": best_dynasty["player"]
-            })
-            if DEV_MODE:
-                print(f"  trade_bait dynasty: {best_dynasty['player'].get('full_name')} ({best_dynasty['position']})")
-
-    # Redraft trade bait — best fc_redraft_value at a full position
-    redraft_viable = [v for v in viable if v["player"].get("fc_redraft_value", 0)]
-    if redraft_viable:
-        best_redraft = max(redraft_viable, key=lambda v: v["player"].get("fc_redraft_value", 0))
-        already_added = any(t["name"] == best_redraft["player"].get("full_name") for t in trade_bait_players)
-        if is_at_capacity(best_redraft["position"]) and not already_added:
-            trade_bait_players.append({
-                "name": best_redraft["player"].get("full_name"),
-                "position": best_redraft["position"],
-                "type": "redraft",
-                "player": best_redraft["player"]
-            })
-            if DEV_MODE:
-                print(f"  trade_bait redraft: {best_redraft['player'].get('full_name')} ({best_redraft['position']})")
-
     # If no urgency scores — all active needs met or no active-bound redraft-viable
     # players remain. Take best dynasty value regardless of placement.
     if not urgency_scores:
@@ -1831,6 +1804,20 @@ def calculate_bpa(available, league_context, all_players=None):
         bpa_player, suggested_pick, gap = _bpa_decision_dynasty_v2(best_overall, best_needed, urgency_scores, viable)
     else:
         bpa_player, suggested_pick, gap = _bpa_decision_redraft_v2(best_overall, best_needed, urgency_scores, viable)
+
+    # Trade bait — only fires when the top player on the board is NOT the recommendation.
+    # If the best player is already being recommended, there is no trade bait scenario.
+    top_player = viable[0] if viable else None
+    if top_player and best_needed and top_player["player"].get("full_name") != (best_needed["player"].get("full_name") if best_needed else None):
+        trade_bait_players.append({
+            "name": top_player["player"].get("full_name"),
+            "position": top_player["position"],
+            "type": "dynasty" if is_dynasty else "redraft",
+            "player": top_player["player"]
+        })
+        if DEV_MODE:
+            print(f"  trade_bait: {top_player['player'].get('full_name')} ({top_player['position']}) — top player not recommended")
+
 
     return bpa_player, suggested_pick, gap, trade_bait_players
 
