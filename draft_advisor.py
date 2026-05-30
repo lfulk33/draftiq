@@ -2,7 +2,7 @@ import json
 import math
 from llm_client import get_completion
 from config import DEV_MODE
-from config import TAXI_THRESHOLD_QB, TAXI_THRESHOLD_RB, TAXI_THRESHOLD_WR, TAXI_THRESHOLD_TE, REDRAFT_THRESHOLD_QB, REDRAFT_THRESHOLD_RB, REDRAFT_THRESHOLD_WR, REDRAFT_THRESHOLD_TE, URGENCY_MODIFIER
+from config import TAXI_THRESHOLD_QB, TAXI_THRESHOLD_RB, TAXI_THRESHOLD_WR, TAXI_THRESHOLD_TE, REDRAFT_THRESHOLD_QB, REDRAFT_THRESHOLD_RB, REDRAFT_THRESHOLD_WR, REDRAFT_THRESHOLD_TE, URGENCY_MODIFIER, DEFAULT_MODEL
 
 # Flex slot eligibility — positions that can fill each flex slot type.
 # Used in replacement level calculation, urgency scoring, and capacity checks.
@@ -293,7 +293,7 @@ KEY FACTS:
 Write ONLY the reasoning as a plain string (2-3 sentences). No JSON, no preamble.
 """
 
-    response = get_completion(prompt, system="You are a dynasty fantasy football expert. Write clear, concise reasoning in 2-3 sentences. No JSON, just plain text.")
+    response = get_completion(prompt, model_key=DEFAULT_MODEL, system="You are a dynasty fantasy football expert. Write clear, concise reasoning in 2-3 sentences. No JSON, just plain text.")
     return response.strip()
 
 def build_prompt(picks, available, my_roster, league_context, pick_number, all_players=None):
@@ -492,7 +492,8 @@ Respond with this exact JSON structure:
 def get_recommendation(picks, available, my_roster, league_context, pick_number, all_players=None):
     prompt = build_prompt(picks, available, my_roster, league_context, pick_number, all_players)
     is_dynasty = league_context.get("is_dynasty", True)
-    response = get_completion(prompt, system=get_system_prompt(is_dynasty))
+    response = get_completion(prompt, model_key=DEFAULT_MODEL, system=get_system_prompt(is_dynasty))
+
     try:
         rec = json.loads(response)
     except json.JSONDecodeError:

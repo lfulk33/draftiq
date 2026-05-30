@@ -27,3 +27,5 @@ REDRAFT_THRESHOLD_TE = 300
 # favor pure VORP. Default 1.0 = equal weight.
 # This will eventually be tunable via the Draft Strategy Slider.
 URGENCY_MODIFIER = 1.0
+# LLM model selection (see llm_client.py for options)
+DEFAULT_MODEL = "claude-haiku"
