@@ -6,6 +6,7 @@ venv/
 
 # Data files (large, auto-generated)
 players.json
+fantasy_players.json
 
 # Environment
 .env
