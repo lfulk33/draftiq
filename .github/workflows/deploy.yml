@@ -1,0 +1,17 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger deploy on server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 44.222.138.156
+          username: ec2-user
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: echo "deploy triggered"
