@@ -99,7 +99,12 @@ def build_league_context(league_detail, draft_detail, my_roster, picks,
             for pid in (my_roster.get("taxi") or [])
             if players.get(pid)
         ],
-        "backup_needs": {pos: backups for pos, backups in backup_counts.items()},
+        "backup_needs": {
+            "QB": 1 if sum(1 for s in league_detail.get("roster_positions", []) if s == "QB") > 0 else 0,
+            "RB": 1 if sum(1 for s in league_detail.get("roster_positions", []) if s == "RB") > 0 else 0,
+            "WR": 1 if sum(1 for s in league_detail.get("roster_positions", []) if s == "WR") > 0 else 0,
+            "TE": 1 if sum(1 for s in league_detail.get("roster_positions", []) if s == "TE") > 0 else 0,
+        },
         "roster_construction_detail": {
             "QB": {
                 "dedicated_slots": sum(1 for s in league_detail.get("roster_positions", []) if s == "QB"),
