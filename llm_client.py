@@ -1,7 +1,7 @@
 import anthropic
 import os
 from dotenv import load_dotenv
-from config import DEV_MODE
+from config import DEV_MODE, DEFAULT_MODEL
 
 load_dotenv()
 
@@ -9,8 +9,8 @@ SUPPORTED_MODELS = {
     "claude":       "claude-sonnet-4-6",
     "claude-haiku": "claude-haiku-4-5-20251001",
     "claude-opus":  "claude-opus-4-7",
-    "gpt4":         "gpt-4o",
-    "gemini":       "gemini-1.5-pro"
+    "gpt4":         "gpt-4o",       # not yet implemented, see _call_openai
+    "gemini":       "gemini-1.5-pro"  # not yet implemented, see _call_gemini
 }
 
 MODEL_COSTS = {
@@ -18,8 +18,6 @@ MODEL_COSTS = {
     "claude-haiku": (1.00, 5.00),
     "claude-opus":  (5.00, 25.00),
 }
-
-DEFAULT_MODEL = "claude-haiku"
 
 CLAUDE_MODELS = {"claude", "claude-haiku", "claude-opus"}
 

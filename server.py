@@ -17,7 +17,7 @@ from config import (
     SLEEPER_USERNAME, BPA_THRESHOLD_DYNASTY, BPA_THRESHOLD_REDRAFT,
     TAXI_THRESHOLD_QB, TAXI_THRESHOLD_RB, TAXI_THRESHOLD_WR, TAXI_THRESHOLD_TE
 )
-from sleeper_league import get_user, get_leagues, get_rosters, get_taxi_players
+from sleeper_league import get_user, get_leagues, get_rosters, get_taxi_players, get_taxi_count
 from sleeper_draft import (
     get_drafts, get_draft_detail, get_picks,
     get_available_rookies, get_available_players, count_my_picks
@@ -26,11 +26,6 @@ from draft_advisor import (
     get_recommendation, calculate_starter_ids,
     calculate_roster_needs, get_roster_recommendations
 )
-
-
-def get_taxi_count(roster):
-    taxi = get_taxi_players(roster)
-    return len(taxi) if taxi else 0
 
 
 def build_league_context(league_detail, draft_detail, my_roster, picks,
