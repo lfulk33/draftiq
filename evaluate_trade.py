@@ -9,8 +9,8 @@ Pulls live roster and league settings from Sleeper, uses fantasy_players.json
 for FC values, and evaluates using the same VORP logic as the draft assistant.
 """
 
-import json
-import requests
+from sleeper_league import get_user, get_league, get_rosters, load_players
+from draft_advisor import FLEX_ELIGIBILITY, calculate_replacement_levels
 
 # ── TRADE CONFIGURATION ──────────────────────────────────────────────────────
 LEAGUE_ID   = "1312646372024930304"
@@ -58,36 +58,9 @@ PICK_VALUES = {
     "2027 mid 4th": 320,
     "2027 late 4th": 220,
 }
-
-# Player you need to cut to make room (None if no cut needed)
-# Their VORP is subtracted from the RECEIVE side as an additional cost
-CUT_PLAYER = None
 # ─────────────────────────────────────────────────────────────────────────────
 
-SLEEPER_BASE = "https://api.sleeper.app/v1"
-
-def get_user_id(username):
-    r = requests.get(f"{SLEEPER_BASE}/user/{username}")
-    r.raise_for_status()
-    return r.json()["user_id"]
-
-def get_league(league_id):
-    r = requests.get(f"{SLEEPER_BASE}/league/{league_id}")
-    r.raise_for_status()
-    return r.json()
-
-def get_rosters(league_id):
-    r = requests.get(f"{SLEEPER_BASE}/league/{league_id}/rosters")
-    r.raise_for_status()
-    return r.json()
-
-def get_users(league_id):
-    r = requests.get(f"{SLEEPER_BASE}/league/{league_id}/users")
-    r.raise_for_status()
-    return r.json()
-
-def find_my_roster(rosters, users, user_id):
-    # Map owner_id -> roster
+def find_my_roster(rosters, user_id):
     for roster in rosters:
         if roster.get("owner_id") == user_id:
             return roster
@@ -100,17 +73,11 @@ def build_league_context(league):
 
     dedicated = {"QB": 0, "RB": 0, "WR": 0, "TE": 0}
     flex_slot_counts = {}
-    flex_eligibility = {
-        "FLEX":      {"RB", "WR", "TE"},
-        "SUPER_FLEX":{"QB", "RB", "WR", "TE"},
-        "WRRB_FLEX": {"RB", "WR"},
-        "REC_FLEX":  {"WR", "TE"},
-    }
 
     for slot in roster_positions:
         if slot in dedicated:
             dedicated[slot] += 1
-        elif slot in flex_eligibility:
+        elif slot in FLEX_ELIGIBILITY:
             flex_slot_counts[slot] = flex_slot_counts.get(slot, 0) + 1
 
     import math
@@ -133,57 +100,6 @@ def build_league_context(league):
         "roster_positions": roster_positions,
         "scoring_settings": scoring_settings,
     }
-
-def calculate_replacement_levels(league_context, player_pool, value_key):
-    import math
-    num_teams = league_context["num_teams"]
-    dedicated = league_context["dedicated_slots"]
-    flex_slot_counts = league_context["flex_slot_counts"]
-    flex_eligibility = {
-        "FLEX":      {"RB", "WR", "TE"},
-        "SUPER_FLEX":{"QB", "RB", "WR", "TE"},
-        "WRRB_FLEX": {"RB", "WR"},
-        "REC_FLEX":  {"WR", "TE"},
-    }
-
-    pos_players = {}
-    for pos in ["QB", "RB", "WR", "TE"]:
-        pos_players[pos] = sorted(
-            [p for p in player_pool.values()
-             if p.get("position") == pos and p.get(value_key, 0)],
-            key=lambda x: x.get(value_key, 0),
-            reverse=True
-        )
-
-    dedicated_cutoff = {pos: dedicated.get(pos, 0) * num_teams for pos in ["QB","RB","WR","TE"]}
-    drafted_count = dict(dedicated_cutoff)
-
-    for slot_type, count in flex_slot_counts.items():
-        eligible = flex_eligibility.get(slot_type, set())
-        slots = count * num_teams
-        candidates = []
-        for pos in eligible:
-            for p in pos_players[pos][drafted_count[pos]:]:
-                candidates.append((p.get(value_key, 0), pos, p))
-        candidates.sort(key=lambda x: x[0], reverse=True)
-        for val, pos, _ in candidates:
-            if slots == 0:
-                break
-            drafted_count[pos] += 1
-            slots -= 1
-
-    replacement = {}
-    for pos in ["QB", "RB", "WR", "TE"]:
-        cutoff = drafted_count[pos]
-        pool = pos_players[pos]
-        if cutoff < len(pool):
-            replacement[pos] = pool[cutoff].get(value_key, 0)
-        elif pool:
-            replacement[pos] = pool[-1].get(value_key, 0)
-        else:
-            replacement[pos] = 0
-
-    return replacement, drafted_count, dedicated_cutoff
 
 def get_vorp(player, replacement, value_key):
     pos = player.get("position", "?")
@@ -214,17 +130,16 @@ def count_pos_on_roster(roster_player_ids, players, pos):
 
 def evaluate():
     print("Loading player data...")
-    with open(PLAYERS_FILE) as f:
-        all_players = json.load(f)
+    all_players = load_players(PLAYERS_FILE)
 
     print(f"Fetching league {LEAGUE_ID}...")
     league = get_league(LEAGUE_ID)
     league_context = build_league_context(league)
 
     print(f"Fetching roster for {USERNAME}...")
-    user_id = get_user_id(USERNAME)
+    user_id = get_user(USERNAME)["user_id"]
     rosters = get_rosters(LEAGUE_ID)
-    my_roster = find_my_roster(rosters, [], user_id)
+    my_roster = find_my_roster(rosters, user_id)
 
     if not my_roster:
         print(f"Could not find roster for {USERNAME}")
@@ -289,15 +204,9 @@ def evaluate():
             need = dedicated + backup
 
             flex_slots = league_context["flex_slot_counts"]
-            flex_eligibility = {
-                "FLEX":      {"RB", "WR", "TE"},
-                "SUPER_FLEX":{"QB", "RB", "WR", "TE"},
-                "WRRB_FLEX": {"RB", "WR"},
-                "REC_FLEX":  {"WR", "TE"},
-            }
             flex_eligible_slots = sum(
                 count for slot, count in flex_slots.items()
-                if pos in flex_eligibility.get(slot, set())
+                if pos in FLEX_ELIGIBILITY.get(slot, set())
             )
 
             roster_status = "NEEDED" if pos_count < need else "DEPTH"

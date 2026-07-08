@@ -46,8 +46,8 @@ def count_my_picks(picks, my_roster_id):
 if __name__ == "__main__":
     league_id = "1312068664308019200"
     
-    with open("fantasy_players.json") as f:
-        players = json.load(f)
+    from sleeper_league import load_players
+    players = load_players()
 
     print("Fetching drafts...")
     drafts = get_drafts(league_id)
