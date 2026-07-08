@@ -13,6 +13,15 @@ FLEX_ELIGIBILITY = {
     "REC_FLEX":   {"WR", "TE"},
 }
 
+# Redraft-value floor per position below which a player is treated as a
+# developmental taxi stash rather than an active-roster contributor.
+TAXI_THRESHOLDS = {
+    "QB": TAXI_THRESHOLD_QB,
+    "RB": TAXI_THRESHOLD_RB,
+    "WR": TAXI_THRESHOLD_WR,
+    "TE": TAXI_THRESHOLD_TE,
+}
+
 
 def get_system_prompt(is_dynasty=True):
     """
@@ -59,18 +68,6 @@ Always respond in valid JSON only. No preamble, no markdown, no explanation outs
 
     return base
 
-def get_flex_eligible(slot_name):
-    known = {
-        "FLEX": {"RB", "WR", "TE"},
-        "SUPER_FLEX": {"QB", "RB", "WR", "TE"},
-        "REC_FLEX": {"WR", "RB", "TE"},
-        "WRRB_FLEX": {"WR", "RB"},
-    }
-    if slot_name in known:
-        return known[slot_name]
-    parts = slot_name.replace("_FLEX", "").split("_")
-    return set(parts)
-
 def calculate_starter_ids(active_ids, players, league_detail):
     roster_positions = league_detail.get("roster_positions", [])
 
@@ -106,7 +103,7 @@ def calculate_starter_ids(active_ids, players, league_detail):
 
     for slot in roster_positions:
         if slot not in single_positions and slot != "BN":
-            eligible = get_flex_eligible(slot)
+            eligible = FLEX_ELIGIBILITY.get(slot) or set(slot.replace("_FLEX", "").split("_"))
             for player in enriched:
                 if player["id"] not in starter_ids and player["position"] in eligible:
                     starter_ids.add(player["id"])
@@ -298,12 +295,7 @@ Write ONLY the reasoning as a plain string (2-3 sentences). No JSON, no preamble
 
 def build_prompt(picks, available, my_roster, league_context, pick_number, all_players=None):
     
-    taxi_thresholds = {
-        "QB": TAXI_THRESHOLD_QB,
-        "RB": TAXI_THRESHOLD_RB,
-        "WR": TAXI_THRESHOLD_WR,
-        "TE": TAXI_THRESHOLD_TE,
-    }
+    taxi_thresholds = TAXI_THRESHOLDS
     # Build team context lookup
     team_qb1 = {}
     team_rb1 = {}
@@ -732,12 +724,7 @@ def _build_sim_state(all_picks, league_context):
     taxi_slots_total = league_context.get("taxi_slots_total", 0) or 0
     taxi_allow_vets = league_context.get("taxi_allow_vets", 0)
 
-    taxi_thresholds = {
-        "QB": TAXI_THRESHOLD_QB,
-        "RB": TAXI_THRESHOLD_RB,
-        "WR": TAXI_THRESHOLD_WR,
-        "TE": TAXI_THRESHOLD_TE,
-    }
+    taxi_thresholds = TAXI_THRESHOLDS
 
     sim_active = {}
     sim_taxi = {}
@@ -848,12 +835,7 @@ def _has_active_redraft_viable(pos, viable_active):
     redraft value to contribute to the active roster.
     Used to determine if urgency should remain active for a position.
     """
-    taxi_thresholds = {
-        "QB": TAXI_THRESHOLD_QB,
-        "RB": TAXI_THRESHOLD_RB,
-        "WR": TAXI_THRESHOLD_WR,
-        "TE": TAXI_THRESHOLD_TE,
-    }
+    taxi_thresholds = TAXI_THRESHOLDS
     threshold = taxi_thresholds.get(pos, 100)
     return any(
         v["position"] == pos and v["player"].get("fc_redraft_value", 0) >= threshold
@@ -1056,7 +1038,15 @@ def _calculate_urgency(viable, picks_by_pos, league_context, drafted_count=None,
 
     return most_urgent_pos, urgency_scores
 
-def _bpa_decision_dynasty_v2(best_overall, best_needed, urgency_scores, viable=None):
+def _bpa_decision_v2(best_overall, best_needed, urgency_scores, viable=None):
+    """
+    Shared BPA decision scoring for both dynasty and redraft leagues.
+
+    Scores every position's best-VORP player by vorp * urgency^URGENCY_MODIFIER
+    (with negative-VORP players shifted by the pool's min VORP so the
+    exponent still discriminates between them), then recommends whichever
+    player scores highest against the position's own urgency.
+    """
     if not best_overall:
         return None, None, 0
     if not best_needed:
@@ -1107,7 +1097,7 @@ def _bpa_decision_dynasty_v2(best_overall, best_needed, urgency_scores, viable=N
              for pos in position_best if pos in urgency_scores],
             key=lambda x: x[4], reverse=True
         )[:5]
-        print(f"_bpa_decision_dynasty_v2:")
+        print(f"_bpa_decision_v2:")
         print(f"  top scores: {all_scores}")
         print(f"  best_needed: {best_needed['player'].get('full_name')} ({needed_pos}), vorp={round(best_needed['vorp'])}, urgency={round(needed_urgency)}, score={round(needed_score)}")
         print(f"  winner: {best_v['player'].get('full_name')} ({best_pos}), score={round(best_score)}")
@@ -1121,286 +1111,6 @@ def _bpa_decision_dynasty_v2(best_overall, best_needed, urgency_scores, viable=N
         return best_v["player"], best_needed["player"], gap
 
     return None, best_needed["player"], 0
-
-def _bpa_decision_redraft_v2(best_overall, best_needed, urgency_scores, viable=None):
-    if not best_overall:
-        return None, None, 0
-    if not best_needed:
-        return None, best_overall["player"], 0
-
-    position_best = {}
-    if viable:
-        for v in viable:
-            pos = v["position"]
-            if pos not in position_best or v["vorp"] > position_best[pos]["vorp"]:
-                position_best[pos] = v
-
-    overall_pos = best_overall["position"]
-    needed_pos = best_needed["position"]
-    overall_urgency = urgency_scores.get(overall_pos, 1)
-    needed_urgency = urgency_scores.get(needed_pos, 1)
-    min_vorp = min(v["vorp"] for v in viable) if viable else 0
-
-    def calc_score(vorp, urgency):
-        if vorp >= 0:
-            return vorp * (urgency ** URGENCY_MODIFIER)
-        else:
-            adjusted = vorp - min_vorp
-            return adjusted * (urgency ** URGENCY_MODIFIER)
-
-    overall_score = calc_score(best_overall["vorp"], overall_urgency)
-    needed_score = calc_score(best_needed["vorp"], needed_urgency)
-
-    best_pos = overall_pos
-    best_score = overall_score
-    best_v = best_overall
-    for pos, v in position_best.items():
-        urgency = urgency_scores.get(pos, 1)
-        score = calc_score(v["vorp"], urgency)
-        if score > best_score:
-            best_score = score
-            best_pos = pos
-            best_v = v
-
-    if DEV_MODE:
-        all_scores = sorted(
-            [(position_best[pos]["player"].get("full_name"), pos,
-              round(position_best[pos]["vorp"]),
-              round(urgency_scores.get(pos, 0)),
-              round(calc_score(position_best[pos]["vorp"], urgency_scores.get(pos, 0))),
-              position_best[pos]["player"].get("fc_redraft_value", 0),
-              position_best[pos].get("placement", "?"))
-             for pos in position_best if pos in urgency_scores],
-            key=lambda x: x[4], reverse=True
-        )[:5]
-        print(f"_bpa_decision_redraft_v2:")
-        print(f"  top scores: {all_scores}")
-        print(f"  best_needed: {best_needed['player'].get('full_name')} ({needed_pos}), vorp={round(best_needed['vorp'])}, urgency={round(needed_urgency)}, score={round(needed_score)}")
-        print(f"  winner: {best_v['player'].get('full_name')} ({best_pos}), score={round(best_score)}")
-        for pos, v in position_best.items():
-            urgency = urgency_scores.get(pos, 1)
-            sc = calc_score(v["vorp"], urgency)
-            print(f"  position_best {pos}: {v['player'].get('full_name')}, vorp={round(v['vorp'])}, urgency={round(urgency)}, score={round(sc)}, placement={v.get('placement')}")
-
-    if best_v["player"].get("full_name") != best_needed["player"].get("full_name"):
-        gap = best_v["vorp"] - best_needed["vorp"]
-        return best_v["player"], best_needed["player"], gap
-
-    return None, best_needed["player"], 0
-
-def _bpa_decision_redraft(best_overall, best_needed, threshold, best_needed_overall=None, needed_positions=None):
-    """
-    BPA decision for redraft leagues.
-
-    Simple comparison: if the best overall player's VORP exceeds the best
-    player at the needed position by more than the threshold, recommend
-    best_overall (pure value). Otherwise recommend best_needed (positional).
-
-    No taxi logic needed — redraft has no taxi squad.
-
-    Args:
-        best_overall: viable dict for highest VORP player ignoring capacity
-        best_needed:  viable dict for highest VORP player at needed position
-        threshold:    BPA_THRESHOLD_REDRAFT from league_context
-
-    Returns:
-        (bpa_player, suggested_pick, gap) where:
-          bpa_player is non-None only when BPA overrides positional need
-          suggested_pick is always the recommended player
-          gap is the VORP difference between best_overall and best_needed
-    """
-    if not best_overall:
-        return None, None, None
-    if best_needed is None:
-        return None, best_overall["player"], 0
-
-    # Compare best_overall against best_needed_overall for BPA threshold check.
-    # This prevents BPA from firing just because the most scarce position
-    # has low VORP players — we compare against the best available at ANY need.
-    
-
-    # best_overall is at capacity — compare against best_needed
-    gap = best_overall["vorp"] - best_needed["vorp"]
-
-    # BPA only fires if best_overall is at a needed position.
-    # A player at an at-capacity position should never override positional need.
-    best_overall_pos = best_overall["player"].get("position") if best_overall else None
-    bpa_eligible = best_overall_pos in (needed_positions or [])
-
-    if (gap > threshold and bpa_eligible and
-            best_overall["player"].get("full_name") != best_needed["player"].get("full_name")):
-        return best_overall["player"], best_needed["player"], gap
-
-    return None, best_needed["player"], gap
-
-def _bpa_decision_dynasty(best_overall, best_needed, viable, sim_taxi,
-                           league_context, threshold, picks_by_pos=None):
-    """
-    BPA decision for dynasty leagues.
-
-    More complex than redraft because of taxi squads. A high-VORP rookie
-    below the redraft threshold might be worth taking as a taxi stash even
-    if they would not make the active roster — that's a dynasty-specific
-    concept with no redraft equivalent.
-
-    Decision tree:
-      1. If taxi is full: only consider players with real redraft value
-         (they must make the active roster). Pick best at needed position
-         unless BPA gap exceeds threshold.
-      2. If taxi has space: consider taxi stashes (high dynasty value,
-         low redraft value, years_exp=0) as legitimate picks. If the
-         best taxi stash has higher VORP than the best needed player,
-         recommend the stash.
-      3. Standard BPA: compare best_overall vs best_needed against threshold.
-
-    Args:
-        best_overall:   viable dict for highest VORP player ignoring capacity
-        best_needed:    viable dict for highest VORP player at needed position
-        viable:         full viable list for taxi stash search
-        sim_taxi:       current taxi squad state
-        league_context: dict from build_league_context
-        threshold:      BPA_THRESHOLD_DYNASTY from league_context
-
-    Returns:
-        (bpa_player, suggested_pick, gap) — same contract as _bpa_decision_redraft
-    """
-    taxi_slots_total = league_context.get("taxi_slots_total", 0) or 0
-    taxi_allow_vets = league_context.get("taxi_allow_vets", 0)
-    taxi_full = len(sim_taxi) >= taxi_slots_total
-    picks_by_pos = picks_by_pos or {}
-    dedicated = league_context.get("dedicated_slots", {})
-    backup_needs = league_context.get("backup_needs", {})
-    has_superflex = league_context.get("has_superflex", False)
-    effective_backup_needs = dict(backup_needs)
-
-    taxi_thresholds = {
-        "QB": TAXI_THRESHOLD_QB,
-        "RB": TAXI_THRESHOLD_RB,
-        "WR": TAXI_THRESHOLD_WR,
-        "TE": TAXI_THRESHOLD_TE,
-    }
-
-    def has_redraft_value(v):
-        """Player has enough redraft value to contribute to active roster."""
-        pos = v["position"]
-        fc_redraft = v["player"].get("fc_redraft_value")
-        if fc_redraft is None:
-            return False
-        return fc_redraft >= taxi_thresholds.get(pos, 100)
-
-    # Split viable into players with active roster value vs taxi-only players
-    redraft_viable = [v for v in viable if has_redraft_value(v)]
-    dynasty_viable = [v for v in viable if not has_redraft_value(v)]
-
-    if DEV_MODE:
-        print(f"_bpa_decision_dynasty:")
-        print(f"  taxi_full: {taxi_full}, taxi: {len(sim_taxi)}/{taxi_slots_total}")
-        print(f"  redraft_viable top 3: {[(v['player'].get('full_name'), round(v['vorp'])) for v in redraft_viable[:3]]}")
-        print(f"  dynasty_viable top 3: {[(v['player'].get('full_name'), round(v['vorp'])) for v in dynasty_viable[:3]]}")
-
-    if taxi_full:
-        # Taxi is full — can only pick players who make the active roster.
-        # Dynasty rookies with no redraft value would just be cut.
-        if redraft_viable:
-            best_redraft_needed = next(
-                (v for v in redraft_viable if v["position"] == best_needed["position"])
-                if best_needed else iter([]),
-                None
-            )
-            best_redraft_overall = redraft_viable[0]
-            if best_redraft_needed is None:
-                return None, best_redraft_overall["player"], 0
-            gap = best_redraft_overall["vorp"] - best_redraft_needed["vorp"]
-            if gap > threshold and best_redraft_overall["position"] != best_needed["position"] if best_needed else False:
-                return best_redraft_overall["player"], best_redraft_needed["player"], gap
-            return None, best_redraft_needed["player"], 0
-        elif dynasty_viable:
-            # No redraft value left — only worth recommending if the player
-            # has better dynasty value than the worst current taxi player,
-            # AND their position isn't already at capacity.
-            at_capacity_positions = [
-                pos for pos in ["QB", "RB", "WR", "TE"]
-                if picks_by_pos.get(pos, 0) >= dedicated.get(pos, 0) + effective_backup_needs.get(pos, 0)
-            ]
-
-            # Find the worst taxi player's dynasty value — the bar to clear
-            worst_taxi_value = min(
-                (p.get("dynasty_value", 0) for p in sim_taxi.values()),
-                default=0
-            )
-
-            # Only recommend players who beat the worst taxi player
-            # AND aren't at a position already at capacity
-            upgrades = [
-                v for v in dynasty_viable
-                if v["player"].get("fc_value", 0) > worst_taxi_value
-                and v["position"] not in at_capacity_positions
-            ]
-
-            if DEV_MODE:
-                print(f"  taxi_full dynasty branch - at_capacity: {at_capacity_positions}")
-                print(f"  worst_taxi_value: {worst_taxi_value}")
-                print(f"  upgrades: {[(v['player'].get('full_name'), v['position'], v['player'].get('fc_value')) for v in upgrades[:3]]}")
-
-            if upgrades:
-                return None, upgrades[0]["player"], 0
-
-            # No taxi upgrade available — just take the best available player
-            # at a needed position, even if below replacement level.
-            # In late rounds of a startup draft you always need to make a pick.
-            non_capacity_dynasty = [
-                v for v in dynasty_viable
-                if v["position"] not in at_capacity_positions
-            ]
-            if non_capacity_dynasty:
-                return None, non_capacity_dynasty[0]["player"], 0
-            # All positions at capacity — take best dynasty value regardless
-            return None, dynasty_viable[0]["player"], 0
-        return None, viable[0]["player"] if viable else None, 0
-
-    else:
-        # Taxi has space — taxi stashes are legitimate picks.
-        # Only consider actual taxi-eligible players as stashes
-        actual_taxi_stashes = [
-            v for v in dynasty_viable
-            if v["player"].get("years_exp", 99) == 0 or taxi_allow_vets == 1
-        ]
-
-        if not best_needed:
-            # All positions at capacity — take best overall or best taxi stash
-            if actual_taxi_stashes and actual_taxi_stashes[0]["vorp"] > (best_overall["vorp"] if best_overall else 0):
-                return None, actual_taxi_stashes[0]["player"], 0
-            return None, best_overall["player"] if best_overall else None, 0
-
-        # Check if a taxi stash has higher VORP than the needed position pick.
-        # Exclude positions already at capacity from taxi stash consideration —
-        # no point stashing a 9th QB when you already have 8.
-        at_capacity_positions = [
-            pos for pos in ["QB", "RB", "WR", "TE"]
-            if picks_by_pos.get(pos, 0) >= dedicated.get(pos, 0) + effective_backup_needs.get(pos, 0)
-        ]
-        if DEV_MODE:
-            print(f"  taxi stash at_capacity check: {at_capacity_positions}")
-            print(f"  picks_by_pos: {picks_by_pos}")
-            print(f"  dedicated: {dedicated}")
-            print(f"  effective_backup_needs: {effective_backup_needs}")
-            print(f"  actual_taxi_stashes: {[(v['player'].get('full_name'), v['position'], round(v['vorp'])) for v in actual_taxi_stashes[:5]]}")
-        viable_taxi_stashes = [
-            v for v in actual_taxi_stashes
-            if v["position"] not in at_capacity_positions
-        ]
-        if viable_taxi_stashes and viable_taxi_stashes[0]["vorp"] > best_needed["vorp"]:
-            return None, viable_taxi_stashes[0]["player"], 0
-
-        if not best_overall:
-            return None, best_needed["player"], 0
-
-        gap = best_overall["vorp"] - best_needed["vorp"]
-        if gap > threshold and best_overall["position"] != best_needed["position"]:
-            return best_overall["player"], best_needed["player"], gap
-
-        return None, best_needed["player"], gap
-
 
 def _find_candidates(viable, most_needed_pos, picks_by_pos, league_context, drafted_count=None, dedicated_cutoff=None, sim_taxi=None):
     """
@@ -1615,12 +1325,7 @@ def simulate_placement(candidate, sim_active, sim_taxi, league_context):
     # Check if player should go to taxi based on redraft value threshold,
     # even if active roster has space. Low redraft value + taxi eligible =
     # developmental stash, not active roster contributor.
-    taxi_thresholds = {
-        "QB": TAXI_THRESHOLD_QB,
-        "RB": TAXI_THRESHOLD_RB,
-        "WR": TAXI_THRESHOLD_WR,
-        "TE": TAXI_THRESHOLD_TE,
-    }
+    taxi_thresholds = TAXI_THRESHOLDS
     pos = candidate.get("position", "?")
     redraft_val = candidate.get("redraft_value", 0) or candidate.get("redraft_proxy", 0) or 0
     below_threshold = redraft_val < taxi_thresholds.get(pos, 100)
@@ -1800,11 +1505,8 @@ def calculate_bpa(available, league_context, all_players=None):
             print(f"  no urgency scores — taking best needed dynasty value: {best_fallback['player'].get('full_name') if best_fallback else None}")
         return None, best_fallback["player"] if best_fallback else None, 0, trade_bait_players
 
-    # Step 7: Mode-specific BPA decision
-    if is_dynasty:
-        bpa_player, suggested_pick, gap = _bpa_decision_dynasty_v2(best_overall, best_needed, urgency_scores, viable)
-    else:
-        bpa_player, suggested_pick, gap = _bpa_decision_redraft_v2(best_overall, best_needed, urgency_scores, viable)
+    # Step 7: BPA decision (identical scoring for dynasty and redraft)
+    bpa_player, suggested_pick, gap = _bpa_decision_v2(best_overall, best_needed, urgency_scores, viable)
 
     # Trade bait — only fires when the top player on the board is NOT the recommendation.
     # If the best player is already being recommended, there is no trade bait scenario.
