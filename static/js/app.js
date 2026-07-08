@@ -140,19 +140,19 @@ $('btn-refresh').addEventListener('click', async () => {
 });
 
 // Tabs
-document.querySelectorAll('.tab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    const tabName = tab.dataset.tab;
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.tab-content').forEach(c => {
-      c.classList.remove('active');
-      c.classList.add('hidden');
-    });
-    tab.classList.add('active');
-    const target = document.getElementById(`tab-${tabName}`);
-    target.classList.remove('hidden');
-    target.classList.add('active');
+function activateTab(tabName) {
+  document.querySelectorAll('.tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.tab === tabName);
   });
+  document.querySelectorAll('.tab-content').forEach(c => {
+    const isTarget = c.id === `tab-${tabName}`;
+    c.classList.toggle('active', isTarget);
+    c.classList.toggle('hidden', !isTarget);
+  });
+}
+
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => activateTab(tab.dataset.tab));
 });
 
 async function loadDraft(disableButton = true) {
@@ -401,14 +401,7 @@ function renderRecommendation(rec) {
 
   show('rec-content');
 
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  document.querySelectorAll('.tab-content').forEach(c => {
-    c.classList.remove('active');
-    c.classList.add('hidden');
-  });
-  document.querySelector('[data-tab="alternatives"]').classList.add('active');
-  $('tab-alternatives').classList.remove('hidden');
-  $('tab-alternatives').classList.add('active');
+  activateTab('alternatives');
 }
 
 function getPlayerTeamFromAvailable(name, draftData) {
