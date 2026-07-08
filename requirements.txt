@@ -1,4 +1,6 @@
-streamlit
+flask
+flask-cors
+gunicorn
 anthropic
 python-dotenv
 requests
