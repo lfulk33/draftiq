@@ -869,10 +869,8 @@ def _calculate_urgency(viable, picks_by_pos, league_context, drafted_count=None,
         most_urgent_pos: position with highest urgency score
         urgency_scores:  dict of {pos: score} for debugging
     """
-    is_dynasty = league_context.get("is_dynasty", True)
     dedicated = league_context.get("dedicated_slots", {})
     backup_needs = league_context.get("backup_needs", {})
-    has_superflex = league_context.get("has_superflex", False)
     num_teams = league_context.get("num_teams", 12)
     my_draft_slot = league_context.get("my_draft_slot", 1) or 1
     current_pick = sum(picks_by_pos.values()) + 1  # approximate current pick number
@@ -1134,10 +1132,8 @@ def _find_candidates(viable, most_needed_pos, picks_by_pos, league_context, draf
         best_overall: viable dict for best player ignoring full positions,
                       or None if viable is empty
     """
-    is_dynasty = league_context.get("is_dynasty", True)
     dedicated = league_context.get("dedicated_slots", {})
     backup_needs = league_context.get("backup_needs", {})
-    has_superflex = league_context.get("has_superflex", False)
 
     effective_backup_needs = dict(backup_needs)
 
@@ -1249,8 +1245,6 @@ def _count_picks_by_pos(sim_active, league_context):
     Returns:
         dict: {pos: count} for QB, RB, WR, TE
     """
-    is_dynasty = league_context.get("is_dynasty", True)
-
     # Count all drafted players by position.
     # Every drafted player occupies a roster spot regardless of value —
     # thresholds are used in taxi routing and BPA decisions, not here.
