@@ -360,6 +360,7 @@ def build_prompt(picks, available, my_roster, league_context, pick_number, all_p
     roster_positions = league_context.get("roster_positions", [])
     te_slots = sum(1 for p in roster_positions if p == "TE")
     qb_slots = sum(1 for p in roster_positions if p in ["QB", "SUPER_FLEX"])
+    has_superflex = any(p == "SUPER_FLEX" for p in roster_positions)
     is_dynasty = league_context.get("is_dynasty", True)
     taxi_total = league_context.get("taxi_slots_total", 0) or 0
     taxi_used = league_context.get("taxi_slots_used", 0) or 0
@@ -429,10 +430,8 @@ TOTAL PICKS MADE SO FAR: {len(picks)}
 
 IMPORTANT ROSTER CONSTRUCTION NOTES:
 - This league has {te_slots} dedicated TE slot(s). {"TE is low priority unless elite." if te_slots == 0 else "TE has some value but is not premium."}
-- This league has {qb_slots} QB-eligible slots including Superflex. QB is elevated in value.
+{f"- This league has {qb_slots} QB-eligible slots including Superflex. QB is elevated in value due to the extra demand from the Superflex slot." if has_superflex else f"- This is a standard {qb_slots}-QB league with no Superflex slot. QB is not scarce here — do not treat QB as elevated in value; weigh it the same as any other position by VORP."}
 - Never use "SUPER_FLEX" in your response. Always write it as "Superflex."
-- Only recommend a TE if they are clearly the best available player by a significant margin.
-- Prioritize QB, RB, and WR unless a TE represents exceptional value.
 - Never suggest an alternative at the same position as the recommendation by saying it is an option "if you don't want another [position]." If the recommendation is a WR and an alternative is also a WR, frame it as the next best player at that position, not as a positional hedge.
 - You have {picks_remaining} picks remaining in this draft including this one.
 {f"- You have {taxi_open} open taxi squad slots remaining (out of {taxi_total} total). ONLY players with years_exp=0 in the player data are taxi eligible. Any player with years_exp >= 1 CANNOT go to taxi regardless of age. Do not suggest taxi for any player unless their years_exp is explicitly listed as 0 in the TOP 20 AVAILABLE PLAYERS list above." if is_dynasty else "- This is a REDRAFT league. Every player must contribute this season. Do not consider dynasty value or long-term upside."}
