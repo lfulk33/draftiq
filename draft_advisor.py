@@ -512,6 +512,14 @@ def get_recommendation(picks, available, my_roster, league_context, pick_number,
         )
         alt["team"] = alt_matched.get("team") if alt_matched else None
 
+    # The whole draft is either dynasty or redraft — never a per-entry choice.
+    # Claude sometimes fabricates a trade_bait entry not present in the
+    # server-computed hint (e.g. when the recommended player is itself the
+    # trade bait candidate), and has no anchor for "type" in that case.
+    # Force it to the actual league mode rather than trust whatever it wrote.
+    for tb in rec.get("trade_bait", []):
+        tb["type"] = "dynasty" if is_dynasty else "redraft"
+
     return rec
 
 def calculate_replacement_levels(league_context, player_pool, value_key):
