@@ -1,4 +1,3 @@
-import json
 import os
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
@@ -9,15 +8,11 @@ load_dotenv()
 app = Flask(__name__, static_folder="static", template_folder="templates")
 CORS(app)
 
-# Load players once at startup
-with open("fantasy_players.json") as f:
-    PLAYERS = {str(k): v for k, v in json.load(f).items()}
-
 from config import (
     SLEEPER_USERNAME, BPA_THRESHOLD_DYNASTY, BPA_THRESHOLD_REDRAFT,
     TAXI_THRESHOLD_QB, TAXI_THRESHOLD_RB, TAXI_THRESHOLD_WR, TAXI_THRESHOLD_TE
 )
-from sleeper_league import get_user, get_leagues, get_rosters, get_taxi_players, get_taxi_count
+from sleeper_league import get_user, get_leagues, get_rosters, get_taxi_players, get_taxi_count, load_players
 from sleeper_draft import (
     get_drafts, get_draft_detail, get_picks,
     get_available_rookies, get_available_players, count_my_picks
@@ -26,6 +21,9 @@ from draft_advisor import (
     get_recommendation, calculate_starter_ids,
     calculate_roster_needs, get_roster_recommendations
 )
+
+# Load players once at startup
+PLAYERS = {str(k): v for k, v in load_players().items()}
 
 
 def build_league_context(league_detail, draft_detail, my_roster, picks,
