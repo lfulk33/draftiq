@@ -1323,6 +1323,18 @@ def simulate_placement(candidate, sim_active, sim_taxi, league_context):
     redraft_val = candidate.get("redraft_value", 0) or candidate.get("redraft_proxy", 0) or 0
     below_threshold = redraft_val < taxi_thresholds.get(pos, 100)
 
+    # Rank within this position only (not the whole roster) — STARTER is
+    # decided against that position's own dedicated slot count. Flex slots
+    # aren't modeled here; this is a rough simulation, not the authoritative
+    # starter calculation (see calculate_starter_ids for that).
+    dedicated_slots = league_context.get("dedicated_slots", {})
+    same_pos = [p for p in all_active if p.get("position") == pos]
+    pos_rank = next(
+        i + 1 for i, p in enumerate(same_pos)
+        if p.get("id") == candidate.get("id")
+    )
+    is_starter = pos_rank <= dedicated_slots.get(pos, 0)
+
     if candidate_rank <= active_capacity:
         # Candidate fits on active roster
         if len(sim_active) < active_capacity:
@@ -1330,7 +1342,7 @@ def simulate_placement(candidate, sim_active, sim_taxi, league_context):
             # But if below redraft threshold and taxi eligible, route to taxi
             if taxi_eligible and below_threshold and len(sim_taxi) < taxi_slots_total:
                 return "TAXI", None
-            if candidate_rank == 1:
+            if is_starter:
                 return "STARTER", None
             return "ACTIVE_BENCH", None
         else:
