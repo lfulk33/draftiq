@@ -382,6 +382,18 @@ function renderRecommendation(rec) {
     }
   }
 
+  // If the recommended player is also flagged as trade bait, badge the main
+  // card instead of listing the same name again in Also Consider.
+  const allTradeBait = rec.trade_bait || [];
+  const selfTradeBait = allTradeBait.find(tb => tb && tb.name === rec.recommendation);
+  const otherTradeBait = allTradeBait.filter(tb => tb !== selfTradeBait);
+  if (selfTradeBait) {
+    const badge = document.createElement('span');
+    badge.className = 'trade-bait-badge';
+    badge.textContent = selfTradeBait.type === 'redraft' ? 'TRADE BAIT · REDRAFT' : 'TRADE BAIT · DYNASTY';
+    metaEl.appendChild(badge);
+  }
+
   const tier = rec.confidence_tier || 'low';
   const gap = rec.confidence_gap || 0;
   $('conf-fill').style.width = confidenceWidth(tier);
@@ -395,7 +407,7 @@ function renderRecommendation(rec) {
   $('rec-meta').style.visibility = 'visible';
   document.querySelector('.rec-conf').style.visibility = 'visible';
   $('rec-reasoning').style.visibility = 'visible';
-  renderAlternatives(rec.alternatives || [], rec.trade_bait || []);
+  renderAlternatives(rec.alternatives || [], otherTradeBait);
   renderRoster();
   renderNotes(rec);
 
