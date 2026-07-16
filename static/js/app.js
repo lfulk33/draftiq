@@ -384,7 +384,9 @@ function renderRecommendation(rec) {
 
   // If the recommended player is also flagged as trade bait, badge the main
   // card instead of listing the same name again in Also Consider.
-  const allTradeBait = rec.trade_bait || [];
+  // trade_bait isn't always an array in Claude's response — normalize first.
+  const rawTradeBait = rec.trade_bait;
+  const allTradeBait = Array.isArray(rawTradeBait) ? rawTradeBait : (rawTradeBait ? [rawTradeBait] : []);
   const selfTradeBait = allTradeBait.find(tb => tb && tb.name === rec.recommendation);
   const otherTradeBait = allTradeBait.filter(tb => tb !== selfTradeBait);
   if (selfTradeBait) {
