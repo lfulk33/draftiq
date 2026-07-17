@@ -1084,12 +1084,26 @@ def _bpa_decision_v2(best_overall, best_needed, urgency_scores, viable=None):
     overall_score = calc_score(best_overall["vorp"], overall_urgency)
     needed_score = calc_score(best_needed["vorp"], needed_urgency)
 
-    best_pos = overall_pos
-    best_score = overall_score
-    best_v = best_overall
+    # Only positions with a real computed urgency (i.e. still actually
+    # needed on this roster — present in urgency_scores) are eligible to
+    # win the override slot. A fully satisfied position (starter + backup
+    # already filled) isn't in urgency_scores at all and defaults to a
+    # placeholder urgency of 1 via .get(pos, 1) — that placeholder is not a
+    # real need signal, so it must never be allowed to outscore a position
+    # that's genuinely still needed just because its league-wide VORP is
+    # high. That scenario is exactly what the separate trade_bait signal
+    # is for, not a MANDATORY override.
+    best_pos = needed_pos
+    best_score = needed_score
+    best_v = best_needed
+    if overall_pos in urgency_scores and overall_score > best_score:
+        best_pos = overall_pos
+        best_score = overall_score
+        best_v = best_overall
     for pos, v in position_best.items():
-        urgency = urgency_scores.get(pos, 1)
-        score = calc_score(v["vorp"], urgency)
+        if pos not in urgency_scores:
+            continue
+        score = calc_score(v["vorp"], urgency_scores[pos])
         if score > best_score:
             best_score = score
             best_pos = pos
