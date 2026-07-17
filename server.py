@@ -1,4 +1,3 @@
-import json
 import os
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
@@ -9,15 +8,11 @@ load_dotenv()
 app = Flask(__name__, static_folder="static", template_folder="templates")
 CORS(app)
 
-# Load players once at startup
-with open("fantasy_players.json") as f:
-    PLAYERS = {str(k): v for k, v in json.load(f).items()}
-
 from config import (
     SLEEPER_USERNAME, BPA_THRESHOLD_DYNASTY, BPA_THRESHOLD_REDRAFT,
     TAXI_THRESHOLD_QB, TAXI_THRESHOLD_RB, TAXI_THRESHOLD_WR, TAXI_THRESHOLD_TE
 )
-from sleeper_league import get_user, get_leagues, get_rosters, get_taxi_players
+from sleeper_league import get_user, get_leagues, get_rosters, get_taxi_players, get_taxi_count, load_players
 from sleeper_draft import (
     get_drafts, get_draft_detail, get_picks,
     get_available_rookies, get_available_players, count_my_picks
@@ -27,10 +22,8 @@ from draft_advisor import (
     calculate_roster_needs, get_roster_recommendations
 )
 
-
-def get_taxi_count(roster):
-    taxi = get_taxi_players(roster)
-    return len(taxi) if taxi else 0
+# Load players once at startup
+PLAYERS = {str(k): v for k, v in load_players().items()}
 
 
 def build_league_context(league_detail, draft_detail, my_roster, picks,
@@ -99,7 +92,12 @@ def build_league_context(league_detail, draft_detail, my_roster, picks,
             for pid in (my_roster.get("taxi") or [])
             if players.get(pid)
         ],
-        "backup_needs": {pos: backups for pos, backups in backup_counts.items()},
+        "backup_needs": {
+            "QB": 1 if sum(1 for s in league_detail.get("roster_positions", []) if s == "QB") > 0 else 0,
+            "RB": 1 if sum(1 for s in league_detail.get("roster_positions", []) if s == "RB") > 0 else 0,
+            "WR": 1 if sum(1 for s in league_detail.get("roster_positions", []) if s == "WR") > 0 else 0,
+            "TE": 1 if sum(1 for s in league_detail.get("roster_positions", []) if s == "TE") > 0 else 0,
+        },
         "roster_construction_detail": {
             "QB": {
                 "dedicated_slots": sum(1 for s in league_detail.get("roster_positions", []) if s == "QB"),

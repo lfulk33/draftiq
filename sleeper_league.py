@@ -2,6 +2,10 @@ import requests
 import json
 from config import SLEEPER_BASE_URL, SLEEPER_USERNAME, SEASON
 
+def load_players(path="fantasy_players.json"):
+    with open(path) as f:
+        return json.load(f)
+
 def get_user(username):
     url = f"{SLEEPER_BASE_URL}/user/{username}"
     response = requests.get(url)

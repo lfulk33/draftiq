@@ -140,19 +140,19 @@ $('btn-refresh').addEventListener('click', async () => {
 });
 
 // Tabs
-document.querySelectorAll('.tab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    const tabName = tab.dataset.tab;
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.tab-content').forEach(c => {
-      c.classList.remove('active');
-      c.classList.add('hidden');
-    });
-    tab.classList.add('active');
-    const target = document.getElementById(`tab-${tabName}`);
-    target.classList.remove('hidden');
-    target.classList.add('active');
+function activateTab(tabName) {
+  document.querySelectorAll('.tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.tab === tabName);
   });
+  document.querySelectorAll('.tab-content').forEach(c => {
+    const isTarget = c.id === `tab-${tabName}`;
+    c.classList.toggle('active', isTarget);
+    c.classList.toggle('hidden', !isTarget);
+  });
+}
+
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => activateTab(tab.dataset.tab));
 });
 
 async function loadDraft(disableButton = true) {
@@ -382,6 +382,20 @@ function renderRecommendation(rec) {
     }
   }
 
+  // If the recommended player is also flagged as trade bait, badge the main
+  // card instead of listing the same name again in Also Consider.
+  // trade_bait isn't always an array in Claude's response — normalize first.
+  const rawTradeBait = rec.trade_bait;
+  const allTradeBait = Array.isArray(rawTradeBait) ? rawTradeBait : (rawTradeBait ? [rawTradeBait] : []);
+  const selfTradeBait = allTradeBait.find(tb => tb && tb.name === rec.recommendation);
+  const otherTradeBait = allTradeBait.filter(tb => tb !== selfTradeBait);
+  if (selfTradeBait) {
+    const badge = document.createElement('span');
+    badge.className = 'trade-bait-badge';
+    badge.textContent = selfTradeBait.type === 'redraft' ? 'TRADE BAIT · REDRAFT' : 'TRADE BAIT · DYNASTY';
+    metaEl.appendChild(badge);
+  }
+
   const tier = rec.confidence_tier || 'low';
   const gap = rec.confidence_gap || 0;
   $('conf-fill').style.width = confidenceWidth(tier);
@@ -395,20 +409,13 @@ function renderRecommendation(rec) {
   $('rec-meta').style.visibility = 'visible';
   document.querySelector('.rec-conf').style.visibility = 'visible';
   $('rec-reasoning').style.visibility = 'visible';
-  renderAlternatives(rec.alternatives || [], rec.trade_bait || []);
+  renderAlternatives(rec.alternatives || [], otherTradeBait);
   renderRoster();
   renderNotes(rec);
 
   show('rec-content');
 
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  document.querySelectorAll('.tab-content').forEach(c => {
-    c.classList.remove('active');
-    c.classList.add('hidden');
-  });
-  document.querySelector('[data-tab="alternatives"]').classList.add('active');
-  $('tab-alternatives').classList.remove('hidden');
-  $('tab-alternatives').classList.add('active');
+  activateTab('alternatives');
 }
 
 function getPlayerTeamFromAvailable(name, draftData) {
