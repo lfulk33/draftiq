@@ -1048,10 +1048,13 @@ def _bpa_decision_v2(best_overall, best_needed, urgency_scores, viable=None):
     """
     Shared BPA decision scoring for both dynasty and redraft leagues.
 
-    Scores every position's best-VORP player by vorp * urgency^URGENCY_MODIFIER
-    (with negative-VORP players shifted by the pool's min VORP so the
-    exponent still discriminates between them), then recommends whichever
-    player scores highest against the position's own urgency.
+    Scores every position's best-VORP player by vorp * urgency^URGENCY_MODIFIER.
+    Positive-VORP players are scored directly. Negative-VORP players are
+    scored by dividing by urgency instead of multiplying, so higher urgency
+    still makes a below-replacement pick relatively less bad (closer to
+    zero) without ever letting it cross into positive territory and beat
+    a real positive-VORP player — a negative score can never outscore a
+    non-negative one.
     """
     if not best_overall:
         return None, None, 0
@@ -1069,14 +1072,13 @@ def _bpa_decision_v2(best_overall, best_needed, urgency_scores, viable=None):
     needed_pos = best_needed["position"]
     overall_urgency = urgency_scores.get(overall_pos, 1)
     needed_urgency = urgency_scores.get(needed_pos, 1)
-    min_vorp = min(v["vorp"] for v in viable) if viable else 0
 
     def calc_score(vorp, urgency):
         if vorp >= 0:
             return vorp * (urgency ** URGENCY_MODIFIER)
         else:
-            adjusted = vorp - min_vorp
-            return adjusted * (urgency ** URGENCY_MODIFIER)
+            safe_urgency = max(urgency, 0.01)
+            return vorp / (safe_urgency ** URGENCY_MODIFIER)
 
     overall_score = calc_score(best_overall["vorp"], overall_urgency)
     needed_score = calc_score(best_needed["vorp"], needed_urgency)
