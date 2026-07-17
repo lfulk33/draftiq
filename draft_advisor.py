@@ -2,7 +2,7 @@ import json
 import math
 from llm_client import get_completion
 from config import DEV_MODE
-from config import TAXI_THRESHOLD_QB, TAXI_THRESHOLD_RB, TAXI_THRESHOLD_WR, TAXI_THRESHOLD_TE, REDRAFT_THRESHOLD_QB, REDRAFT_THRESHOLD_RB, REDRAFT_THRESHOLD_WR, REDRAFT_THRESHOLD_TE, URGENCY_MODIFIER, DEFAULT_MODEL
+from config import TAXI_THRESHOLD_QB, TAXI_THRESHOLD_RB, TAXI_THRESHOLD_WR, TAXI_THRESHOLD_TE, REDRAFT_THRESHOLD_QB, REDRAFT_THRESHOLD_RB, REDRAFT_THRESHOLD_WR, REDRAFT_THRESHOLD_TE, URGENCY_MODIFIER, DEFAULT_MODEL, TE_FLEX_ONLY_VALUE_DISCOUNT
 
 # Flex slot eligibility — positions that can fill each flex slot type.
 # Used in replacement level calculation, urgency scoring, and capacity checks.
@@ -549,6 +549,20 @@ def get_recommendation(picks, available, my_roster, league_context, pick_number,
 
     return rec
 
+def _effective_value(player, value_key, league_context):
+    """
+    Value used for VORP/replacement-level purposes. Identical to the raw
+    value_key field except for TE in a league with zero dedicated TE slots,
+    where it's discounted by TE_FLEX_ONLY_VALUE_DISCOUNT (see config.py for
+    why — FantasyCalc has no way to price TE for a league where it's purely
+    flex-competitive, not a required position).
+    """
+    raw = player.get(value_key, 0) or 0
+    if player.get("position") == "TE" and league_context.get("dedicated_slots", {}).get("TE", 0) == 0:
+        return raw * (1 - TE_FLEX_ONLY_VALUE_DISCOUNT)
+    return raw
+
+
 def calculate_replacement_levels(league_context, player_pool, value_key):
     """
     Calculate the replacement level value for each position (QB, RB, WR, TE).
@@ -594,7 +608,7 @@ def calculate_replacement_levels(league_context, player_pool, value_key):
                 p for p in player_pool.values()
                 if p.get("position") == pos and p.get(value_key, 0)
             ],
-            key=lambda x: x.get(value_key, 0),
+            key=lambda x: _effective_value(x, value_key, league_context),
             reverse=True
         )
 
@@ -633,7 +647,7 @@ def calculate_replacement_levels(league_context, player_pool, value_key):
             for pos in eligible_positions:
                 remaining = pos_players[pos][drafted_count[pos]:]
                 for p in remaining:
-                    flex_candidates.append((p.get(value_key, 0), pos, p))
+                    flex_candidates.append((_effective_value(p, value_key, league_context), pos, p))
 
             # Sort by value descending — best player fills first
             flex_candidates.sort(key=lambda x: x[0], reverse=True)
@@ -654,10 +668,10 @@ def calculate_replacement_levels(league_context, player_pool, value_key):
         players_at_pos = pos_players[pos]
         if cutoff < len(players_at_pos):
             # The player just outside the draft window is the replacement
-            replacement[pos] = players_at_pos[cutoff].get(value_key, 0)
+            replacement[pos] = _effective_value(players_at_pos[cutoff], value_key, league_context)
         elif players_at_pos:
             # Everyone at this position is already drafted — use the last player
-            replacement[pos] = players_at_pos[-1].get(value_key, 0)
+            replacement[pos] = _effective_value(players_at_pos[-1], value_key, league_context)
         else:
             replacement[pos] = 0
 
@@ -711,7 +725,7 @@ def calculate_vorp(available, league_context, all_players=None):
     vorp_players = []
     for p in available.values():
         pos = p.get("position", "?")
-        val = p.get(value_key, 0) or 0
+        val = _effective_value(p, value_key, league_context)
 
         # Skip players with no value data or at non-standard positions (K, DEF)
         if pos not in replacement or not val:

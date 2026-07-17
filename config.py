@@ -27,5 +27,15 @@ REDRAFT_THRESHOLD_TE = 300
 # favor pure VORP. Default 1.0 = equal weight.
 # This will eventually be tunable via the Draft Strategy Slider.
 URGENCY_MODIFIER = 1.0
+# FantasyCalc's TE value has no way to condition on roster construction (its
+# API only accepts numTeams/numQbs/ppr/isDynasty) — it assumes a dedicated TE
+# slot is required, which the overwhelming majority of leagues have. In a
+# league with zero dedicated TE slots (TE is purely flex-competitive), that
+# assumption inflates every TE's effective value relative to what they're
+# actually worth fighting for a FLEX/REC_FLEX/SUPER_FLEX spot against RB/WR.
+# Applied only to TE value in calculate_replacement_levels/calculate_vorp when
+# a league has zero dedicated TE slots. Tuned by hand against live drafts —
+# see TE_FLEX_ONLY_VALUE_DISCOUNT in draft_advisor.py for how it's applied.
+TE_FLEX_ONLY_VALUE_DISCOUNT = 0.45
 # LLM model selection (see llm_client.py for options)
 DEFAULT_MODEL = "claude-haiku"
