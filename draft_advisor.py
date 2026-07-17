@@ -369,6 +369,26 @@ def build_prompt(picks, available, my_roster, league_context, pick_number, all_p
     taxi_open = max(0, taxi_total - taxi_used) if is_dynasty else 0
     
     picks_remaining = league_context.get("picks_remaining_for_me", 0)
+
+    # Precomputed have/total/filled per position — matches the frontend's own
+    # Roster Needs widget exactly (dedicated slots + backup slots vs actual
+    # drafted count). Given to Claude directly so it never has to reconstruct
+    # this arithmetic itself from separate JSON blocks, which is exactly
+    # where it has previously gotten it wrong (e.g. claiming "zero TE depth"
+    # when a backup TE was already rostered).
+    roster_construction_detail = league_context.get("roster_construction_detail", {})
+    backup_needs_map = league_context.get("backup_needs", {})
+    all_drafted = league_context.get("my_picks_this_draft", []) + league_context.get("my_existing_roster", [])
+    roster_needs_summary = {}
+    for pos in ["QB", "RB", "WR", "TE"]:
+        dedicated_slots_count = roster_construction_detail.get(pos, {}).get("dedicated_slots", 0)
+        backup = backup_needs_map.get(pos, 0)
+        total_need = dedicated_slots_count + backup
+        have = sum(1 for p in all_drafted if p.get("position") == pos)
+        remaining = max(0, total_need - have)
+        status = "FILLED — do not draft another here unless the value is truly exceptional" if remaining == 0 else f"NEEDS {remaining} MORE"
+        roster_needs_summary[pos] = f"{have}/{total_need} ({status})"
+
     bpa_player, suggested_pick, bpa_gap, trade_bait_players = calculate_bpa(available, league_context, all_players)
     if DEV_MODE:
         print(f"bpa_player: {bpa_player.get('full_name') if bpa_player else None}")
@@ -452,8 +472,12 @@ MY CURRENT STARTING LINEUP BY POSITION:
 NOTE: These are the actual players filling starter slots including flex. A position with starters equal to or exceeding its dedicated slots is using flex spots. Do not recommend more players at a position that is already well covered in the starting lineup unless their VORP is exceptional.
 {json.dumps({pos: sum(1 for p in league_context.get("my_picks_this_draft", []) + league_context.get("my_existing_roster", []) if p.get("position") == pos) for pos in ["QB", "RB", "WR", "TE"]}, indent=2)}
 
-NOTE: Use the ROSTER CONSTRUCTION DETAIL above to determine how many more players you need at each position. NEVER reference "starter_needs" by name. NEVER add dedicated slots and flex slots together into a single number. Always state them separately, e.g. "2 dedicated RB slots plus 2 flex slots eligible for RB." Do not say "4 RB slots" or "4 flex-eligible slots."
-- ROSTER CONSTRUCTION RULE: Look at PLAYERS ALREADY DRAFTED BY POSITION and compare to ROSTER CONSTRUCTION DETAIL to determine what's still needed. Prioritize positions where dedicated slots are unfilled before adding depth at covered positions.
+ROSTER NEEDS SUMMARY (have / dedicated+backup slots needed — already computed, trust this completely):
+{json.dumps(roster_needs_summary, indent=2)}
+CRITICAL: This summary already counts every player you have at each position, including backups and flex-only players. Never state or imply a position has "no depth," "no backup," or is a gap if this summary shows it FILLED — that is a direct contradiction of data you were given. If a position shows FILLED, only recommend adding another there for truly exceptional value or as a trade asset (use the trade_bait field for that, not the main recommendation).
+
+NOTE: Use the ROSTER CONSTRUCTION DETAIL above to determine how more players break down between dedicated and flex slots. NEVER reference "starter_needs" by name. NEVER add dedicated slots and flex slots together into a single number. Always state them separately, e.g. "2 dedicated RB slots plus 2 flex slots eligible for RB." Do not say "4 RB slots" or "4 flex-eligible slots."
+- ROSTER CONSTRUCTION RULE: Use the ROSTER NEEDS SUMMARY above to determine what's still needed. Prioritize positions where dedicated slots are unfilled before adding depth at covered positions.
 - If a MANDATORY RECOMMENDATION appears above, you must follow it. Explain the VORP advantage in your reasoning.
 - When no MANDATORY RECOMMENDATION exists and dedicated starter slots are unfilled, recommend the highest VORP player at the most needed unfilled position.
 - When all dedicated starter slots are filled, recommend the highest VORP player overall from the TOP 10 AVAILABLE PLAYERS BY VORP list, regardless of position, unless that position already has starters filled AND at least {league_context.get("backup_needs", {}).get("QB", 1)} backups drafted.
