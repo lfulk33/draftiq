@@ -1045,7 +1045,7 @@ def _calculate_urgency(viable, picks_by_pos, league_context, drafted_count=None,
 
     return most_urgent_pos, urgency_scores
 
-def _bpa_decision_v2(best_overall, best_needed, urgency_scores, viable=None):
+def _bpa_decision_v2(best_overall, best_needed, urgency_scores, viable=None, starter_needed_positions=None):
     """
     Shared BPA decision scoring for both dynasty and redraft leagues.
 
@@ -1056,6 +1056,14 @@ def _bpa_decision_v2(best_overall, best_needed, urgency_scores, viable=None):
     zero) without ever letting it cross into positive territory and beat
     a real positive-VORP player — a negative score can never outscore a
     non-negative one.
+
+    starter_needed_positions: set of positions whose dedicated starter
+    slot(s) aren't filled yet. When non-empty, only those positions are
+    eligible to win the override — a backup-tier pick (its own starter
+    slot already filled) can't hijack the MANDATORY recommendation while
+    some other position doesn't even have a starter yet, no matter its
+    raw VORP. Once every position has its starter, this constraint lifts
+    and backup-tier positions become eligible again.
     """
     if not best_overall:
         return None, None, 0
@@ -1093,15 +1101,26 @@ def _bpa_decision_v2(best_overall, best_needed, urgency_scores, viable=None):
     # that's genuinely still needed just because its league-wide VORP is
     # high. That scenario is exactly what the separate trade_bait signal
     # is for, not a MANDATORY override.
+    def eligible_for_override(pos):
+        if pos not in urgency_scores:
+            return False
+        if starter_needed_positions and pos not in starter_needed_positions:
+            # Backup-tier position (its own starter slot already filled)
+            # can't hijack the override while another position still
+            # needs a starter — bench depth is always lower priority
+            # than a starting lineup slot.
+            return False
+        return True
+
     best_pos = needed_pos
     best_score = needed_score
     best_v = best_needed
-    if overall_pos in urgency_scores and overall_score > best_score:
+    if eligible_for_override(overall_pos) and overall_score > best_score:
         best_pos = overall_pos
         best_score = overall_score
         best_v = best_overall
     for pos, v in position_best.items():
-        if pos not in urgency_scores:
+        if not eligible_for_override(pos):
             continue
         score = calc_score(v["vorp"], urgency_scores[pos])
         if score > best_score:
@@ -1537,7 +1556,13 @@ def calculate_bpa(available, league_context, all_players=None):
         return None, best_fallback["player"] if best_fallback else None, 0, trade_bait_players
 
     # Step 7: BPA decision (identical scoring for dynasty and redraft)
-    bpa_player, suggested_pick, gap = _bpa_decision_v2(best_overall, best_needed, urgency_scores, viable)
+    starter_needed_positions = {
+        pos for pos in ["QB", "RB", "WR", "TE"]
+        if picks_by_pos.get(pos, 0) < dedicated.get(pos, 0)
+    }
+    bpa_player, suggested_pick, gap = _bpa_decision_v2(
+        best_overall, best_needed, urgency_scores, viable, starter_needed_positions
+    )
 
     # Trade bait — only fires when the top player on the board is NOT the recommendation.
     # If the best player is already being recommended, there is no trade bait scenario.
