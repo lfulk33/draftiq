@@ -948,27 +948,44 @@ def _team_position_counts(roster_id, all_picks, players, rosters_by_id=None):
     return counts
 
 
+def _excluded_from_best(player, strict_starter_health):
+    """
+    True if this player shouldn't be allowed to represent "the best
+    option" for a position — either a manual backup_only override (see
+    player_overrides.py; applies in every league, deliberate and
+    individually verified, e.g. a Best Ball skeptical-injury-timeline
+    call) or, only when strict_starter_health is on (Chopped-only), any
+    current real Sleeper injury_status. The override check is
+    unconditional on purpose: a Best Ball league wants ceiling/risk
+    tolerance for injuries in general, so it must never blanket-exclude
+    every Sleeper-flagged injury — only the specific players actually
+    placed on the list.
+    """
+    if player.get("is_backup_only_override"):
+        return True
+    return bool(strict_starter_health and player.get("injury_status"))
+
+
 def _best_healthy_first(pool, strict_starter_health, pos=None):
     """
     Best player in `pool` (already VORP-sorted descending), preferring a
-    healthy one when strict_starter_health is on — same reasoning as the
+    non-excluded one (see _excluded_from_best) — same reasoning as the
     best_now/best_after health gate in _calculate_urgency, applied here to
     the actual candidate selection (best_overall/best_needed/position_best)
     instead of just the opportunity-cost math. Without this, an injured
-    player with the top raw VORP at his position still wins the final
-    recommendation outright — the opportunity-cost fix alone only stops
-    him from inflating OTHER candidates' scores, it doesn't stop him from
-    winning on his own real VORP.
+    or overridden player with the top raw VORP at his position still wins
+    the final recommendation outright — the opportunity-cost fix alone
+    only stops him from inflating OTHER candidates' scores, it doesn't
+    stop him from winning on his own real VORP.
 
-    Falls back to the unfiltered top if no healthy candidate exists at
+    Falls back to the unfiltered top if no eligible candidate exists at
     all (never make a position vanish from consideration entirely).
     pos=None means "best overall," not restricted to one position.
     """
     candidates = pool if pos is None else [v for v in pool if v["position"] == pos]
-    if strict_starter_health:
-        healthy = [v for v in candidates if not v["player"].get("injury_status")]
-        if healthy:
-            return healthy[0]
+    eligible = [v for v in candidates if not _excluded_from_best(v["player"], strict_starter_health)]
+    if eligible:
+        return eligible[0]
     return candidates[0] if candidates else None
 
 
@@ -1075,9 +1092,7 @@ def _simulate_team_aware_best_after(viable_active, adp_map, pick_sequence, all_p
             # the simulation above (an injured player is a real speculative
             # target) — but he shouldn't be treated as YOUR surviving best
             # option for a starter slot you can't afford to gamble on.
-            candidates = pool
-            if strict_starter_health:
-                candidates = [v for v in pool if not v["player"].get("injury_status")]
+            candidates = [v for v in pool if not _excluded_from_best(v["player"], strict_starter_health)]
             best = next((v for v in candidates if v["position"] == pos), None)
             totals[pos] += best["vorp"] if best else 0
 
@@ -1207,10 +1222,8 @@ def _calculate_urgency(viable, picks_by_pos, league_context, drafted_count=None,
     # who best_now/best_after treat as the position's top option; it does
     # NOT remove anyone from the actual candidate pool used elsewhere (a
     # flagged player still shows up, still scores on his own real VORP).
-    if league_context.get("strict_starter_health"):
-        healthy_active = [v for v in viable_active if not v["player"].get("injury_status")]
-    else:
-        healthy_active = viable_active
+    _strict_starter_health = league_context.get("strict_starter_health", False)
+    healthy_active = [v for v in viable_active if not _excluded_from_best(v["player"], _strict_starter_health)]
 
     # Get best available ACTIVE player at each position right now
     best_now = {}
@@ -1247,7 +1260,7 @@ def _calculate_urgency(viable, picks_by_pos, league_context, drafted_count=None,
                 viable_active, adp_map, pick_sequence, all_picks, all_players,
                 dedicated, league_context.get("rosters_by_id"), needed_positions,
                 seed=current_pick_number,
-                strict_starter_health=league_context.get("strict_starter_health", False)
+                strict_starter_health=_strict_starter_health
             )
         except Exception as e:
             if DEV_MODE:
@@ -1264,8 +1277,7 @@ def _calculate_urgency(viable, picks_by_pos, league_context, drafted_count=None,
         else:
             top_n_players = [v["player"].get("full_name") for v in viable_active[:picks_until_next]]
         viable_after = [v for v in viable_active if v["player"].get("full_name") not in top_n_players]
-        if league_context.get("strict_starter_health"):
-            viable_after = [v for v in viable_after if not v["player"].get("injury_status")]
+        viable_after = [v for v in viable_after if not _excluded_from_best(v["player"], _strict_starter_health)]
 
         # Get best available ACTIVE player at each position after N picks
         best_after = {}
@@ -1506,7 +1518,7 @@ def _bpa_decision_v2(best_overall, best_needed, urgency_scores, viable=None, sta
             pos = v["position"]
             if pos not in position_best_any_health or v["vorp"] > position_best_any_health[pos]["vorp"]:
                 position_best_any_health[pos] = v
-            if strict_starter_health and v["player"].get("injury_status"):
+            if _excluded_from_best(v["player"], strict_starter_health):
                 continue
             if pos not in position_best or v["vorp"] > position_best[pos]["vorp"]:
                 position_best[pos] = v

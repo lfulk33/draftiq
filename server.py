@@ -255,22 +255,27 @@ def _build_draft_state(draft_id, league_id, user_id):
 
     # Manual per-player corrections (see player_overrides.py) — hand-verified
     # facts Sleeper's own data doesn't reliably carry, most commonly a
-    # suspension/exempt-list situation that never shows up in injury_status.
-    # Scoped to the Chopped league only, same as strict_starter_health below.
-    if league_id == CHOPPED_LEAGUE_ID:
-        overrides, _overrides_unmatched = player_overrides.load_overrides(effective_players)
-        if _overrides_unmatched:
-            print(f"[player_overrides] {len(_overrides_unmatched)} unmatched: {_overrides_unmatched}")
-        removed_ids = {pid for pid, state in overrides.items() if state == "removed"}
-        backup_only_ids = {pid for pid, state in overrides.items() if state == "backup_only"}
-        effective_players = {
-            pid: (
-                {**p, "injury_status": p.get("injury_status") or "Override: backup only"}
-                if pid in backup_only_ids else p
-            )
-            for pid, p in effective_players.items()
-            if pid not in removed_ids
-        }
+    # suspension/exempt-list situation (or, for Best Ball, real skepticism
+    # about an official injury timeline) that never shows up in
+    # injury_status. Applies to every league — these are deliberate,
+    # individually-verified corrections, not a blanket policy, so there's
+    # no reason to scope them to one league the way strict_starter_health
+    # (below) is. Stamped as a separate is_backup_only_override field
+    # rather than reusing injury_status, so it doesn't get tangled with
+    # strict_starter_health's Chopped-only Sleeper-injury_status check —
+    # a Best Ball league should never auto-exclude every Sleeper-flagged
+    # injury (that league wants ceiling/risk tolerance), only the specific
+    # players actually placed on this list.
+    overrides, _overrides_unmatched = player_overrides.load_overrides(effective_players)
+    if _overrides_unmatched:
+        print(f"[player_overrides] {len(_overrides_unmatched)} unmatched: {_overrides_unmatched}")
+    removed_ids = {pid for pid, state in overrides.items() if state == "removed"}
+    backup_only_ids = {pid for pid, state in overrides.items() if state == "backup_only"}
+    effective_players = {
+        pid: ({**p, "is_backup_only_override": True} if pid in backup_only_ids else p)
+        for pid, p in effective_players.items()
+        if pid not in removed_ids
+    }
 
     available = (
         get_available_rookies(effective_players, picks)
