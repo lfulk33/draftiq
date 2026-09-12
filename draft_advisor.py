@@ -2135,16 +2135,32 @@ def calculate_bpa(available, league_context, all_players=None):
     # starter, so go get a 2nd one."
     value_field = league_context.get("value_type", "dynasty_value")
     positions_for_comparison = ["QB", "RB", "WR", "TE"] if has_superflex else ["RB", "WR", "TE"]
+    # SUPER_FLEX is a second real starting slot QB competes for, on top of
+    # its one dedicated slot. Using bare `dedicated["QB"]` here would treat
+    # QB as fully staffed the instant that one slot is filled, dampening a
+    # genuinely strong 2nd QB's opportunity_cost the same way a 3rd RB
+    # nobody will ever start gets dampened — live-verified: with only
+    # Lawrence drafted, QB's modifier came out to 0.35 even though the
+    # SUPER_FLEX slot sitting open is exactly as real a starter opportunity
+    # as an open FLEX is for RB/WR. RB/WR/TE don't need this adjustment:
+    # FLEX/SUPER_FLEX are shared across all of them symmetrically, so this
+    # comparison already weighs them fairly against each other. QB is the
+    # only position whose entire flex-eligible capacity is this one shared
+    # slot, uniquely undercounted by dedicated_slots alone.
+    starter_slot_counts = dict(dedicated)
+    if has_superflex:
+        starter_slot_counts["QB"] = dedicated.get("QB", 0) + 1
     starter_vorp_by_position = {}
     for pos in positions_for_comparison:
-        if picks_by_pos.get(pos, 0) < dedicated.get(pos, 0):
+        required = starter_slot_counts.get(pos, 0)
+        if picks_by_pos.get(pos, 0) < required:
             continue  # doesn't have all its starters yet, not part of this comparison
         pos_players = sorted(
             (p for p in sim_active.values() if p.get("position") == pos),
             key=lambda p: p.get(value_field, 0) or 0,
             reverse=True
         )
-        starters = pos_players[:dedicated.get(pos, 0)]
+        starters = pos_players[:required]
         if starters:
             starter_vorp_by_position[pos] = min(
                 (s.get(value_field, 0) or 0) - replacement.get(pos, 0) for s in starters
