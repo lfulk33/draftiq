@@ -15,6 +15,27 @@ const state = {
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+// SSO gateway now sits in front of this app. A fetch() never gets an HTML
+// login page on 401 (nginx forces the JSON branch for /api/ requests), so we
+// have to catch the status ourselves and navigate — otherwise a session
+// expiring mid-draft just surfaces as a generic "unauthenticated" error with
+// no way forward. Returns the raw response so existing call sites can keep
+// their own res.json()/res.ok handling unchanged.
+function ssoFetch(url, opts) {
+  return fetch(url, opts).then(res => {
+    if (res.status === 401) {
+      location.href = 'https://apps.paragoncommerce.co/login?next=' +
+                      encodeURIComponent(location.href);
+      return new Promise(() => {}); // never resolves; we are navigating away
+    }
+    if (res.status === 403) {
+      location.href = 'https://apps.paragoncommerce.co/denied?app=draftiq';
+      return new Promise(() => {});
+    }
+    return res;
+  });
+}
+
 const $ = id => document.getElementById(id);
 const show = id => document.getElementById(id).classList.remove('hidden');
 const hide = id => document.getElementById(id).classList.add('hidden');
@@ -124,7 +145,7 @@ async function loadLeagues() {
   const username = $('input-username').value.trim();
   if (!username) return;
 
-  const res = await fetch(`/api/leagues?username=${encodeURIComponent(username)}`);
+  const res = await ssoFetch(`/api/leagues?username=${encodeURIComponent(username)}`);
   const data = await res.json();
   if (data.error) throw new Error(data.error);
 
@@ -175,7 +196,7 @@ async function runReport(mode) {
       username: state.username,
       league_ids: leagueIds.join(','),
     });
-    const res = await fetch(`${cfg.endpoint}?${params}`);
+    const res = await ssoFetch(`${cfg.endpoint}?${params}`);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Failed to generate report.');
 
@@ -369,7 +390,7 @@ async function loadDraft(disableButton = true) {
 
   if (disableButton) $('btn-recommend').disabled = true;
   try {
-    const res = await fetch(
+    const res = await ssoFetch(
       `/api/draft/${selectedDraftId}?league_id=${selectedLeague.league_id}&user_id=${userId}`
     );
     const data = await res.json();
@@ -531,7 +552,7 @@ async function getRecommendation() {
       await loadDraft(false);
     }
 
-    const res = await fetch('/api/recommend', {
+    const res = await ssoFetch('/api/recommend', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -548,7 +569,7 @@ async function getRecommendation() {
     if (res.status === 409) {
       // Board changed during recommendation — refresh and retry once automatically
       await loadDraft();
-      const retryRes = await fetch('/api/recommend', {
+      const retryRes = await ssoFetch('/api/recommend', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -997,7 +1018,7 @@ const savedUsername = localStorage.getItem('da_username');
 if (savedUsername) {
   $('input-username').value = savedUsername;
 } else {
-  fetch('/api/default-username')
+  ssoFetch('/api/default-username')
     .then(r => r.json())
     .then(d => { if (d.username) $('input-username').value = d.username; })
     .catch(() => { });

@@ -1,12 +1,10 @@
 import os
 from flask import Flask, jsonify, request, send_from_directory, render_template
-from flask_cors import CORS
 from dotenv import load_dotenv
 
 load_dotenv()
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
-CORS(app)
 
 from config import (
     SLEEPER_USERNAME, BPA_THRESHOLD_DYNASTY, BPA_THRESHOLD_REDRAFT,
