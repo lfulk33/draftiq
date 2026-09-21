@@ -1,22 +1,39 @@
-#!/bin/bash
-# Deploy: push to GitHub, then pull and restart on the box.
+#!/usr/bin/env bash
+# Deploy draftiq. Matches the pattern the other five apps on the box use.
 #
-# This mirrors what already lived, untracked, as ~/draft-assistant/deploy.sh
-# on the box — pulled into the repo so it's recoverable and documented rather
-# than living only as a file nobody has a copy of. Unlike the bare-repo +
-# post-receive pattern other apps on this box use, draft-assistant's box
-# checkout is a plain clone: this script pulls into it directly over ssh
-# rather than pushing to a `prod` remote.
-set -euo pipefail
+# WHAT CHANGED (2026-09-20, by the parent thread at Larry's request):
+# this used to `git push origin` then ssh in and `git pull` into a plain clone.
+# The box now has the house layout — a bare repo at ~/draft-assistant/repo.git
+# and a work tree at ~/draft-assistant/checkout — so deploying is a push to
+# `prod`, and a post-receive hook checks out, restarts and health-checks.
+#
+# The verification below is FantasyFootball's, kept because it is the right
+# check: confirm the served URL answers rather than trusting a clean exit.
+# It has moved client-side for a reason learned the hard way the same day:
+# a post-receive hook CANNOT fail a push. It runs after git has accepted the
+# refs, so `git push` returns 0 however loudly the hook complains. The hook is
+# the early warning; this script is the gate.
+#
+# The app writes its own JSON caches into the work tree, and `git checkout -f`
+# leaves untracked files alone, so deploys do not disturb them.
+set -uo pipefail
+cd "$(dirname "$0")/.."
 
-git push origin main
+echo "== push to GitHub (off-box copy first) =="
+git push origin main || { echo "PUSH TO ORIGIN FAILED"; exit 1; }
 
-ssh paragon 'cd ~/draft-assistant && git pull origin main && sudo systemctl restart draft-assistant'
+echo "== deploy to the box =="
+git push prod main || { echo "PUSH TO PROD FAILED"; exit 1; }
 
-# Verify by fetching the served URL, not by trusting a clean exit above —
-# a restart can succeed while the app fails to come back up.
+echo "== verify the SERVED url, not the exit code =="
 code=$(curl -s -o /dev/null -w '%{http_code}' https://draftiq.paragoncommerce.co/api/default-username)
 case "$code" in
-  200|302|401) echo "Deployed. draftiq answering (HTTP $code)." ;;
-  *) echo "Deployed, but draftiq is not answering as expected (HTTP $code)."; exit 1 ;;
+  200|302|401) echo "  draftiq answering (HTTP $code) — 401/302 is correct when signed out" ;;
+  *) echo "  draftiq is NOT answering as expected (HTTP $code)"; exit 1 ;;
 esac
+
+echo "== and that it still refuses an uncookied request =="
+if [ -x ../paragon-sso/deploy/proveprotected.sh ]; then
+  ../paragon-sso/deploy/proveprotected.sh draftiq.paragoncommerce.co | tail -1
+fi
+echo "deployed."
