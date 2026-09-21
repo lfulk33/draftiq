@@ -1,0 +1,22 @@
+#!/bin/bash
+# Deploy: push to GitHub, then pull and restart on the box.
+#
+# This mirrors what already lived, untracked, as ~/draft-assistant/deploy.sh
+# on the box — pulled into the repo so it's recoverable and documented rather
+# than living only as a file nobody has a copy of. Unlike the bare-repo +
+# post-receive pattern other apps on this box use, draft-assistant's box
+# checkout is a plain clone: this script pulls into it directly over ssh
+# rather than pushing to a `prod` remote.
+set -euo pipefail
+
+git push origin main
+
+ssh paragon 'cd ~/draft-assistant && git pull origin main && sudo systemctl restart draft-assistant'
+
+# Verify by fetching the served URL, not by trusting a clean exit above —
+# a restart can succeed while the app fails to come back up.
+code=$(curl -s -o /dev/null -w '%{http_code}' https://draftiq.paragoncommerce.co/api/default-username)
+case "$code" in
+  200|302|401) echo "Deployed. draftiq answering (HTTP $code)." ;;
+  *) echo "Deployed, but draftiq is not answering as expected (HTTP $code)."; exit 1 ;;
+esac
