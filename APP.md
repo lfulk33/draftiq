@@ -36,13 +36,24 @@ Server-rendered Flask (`server.py`) serving a static JS/HTML frontend
 
     ./deploy/push
 
-Run from the laptop. Pushes to `origin/main`, then over ssh: `git pull origin
-main` in the box's plain checkout at `~/draft-assistant`, then
-`sudo systemctl restart draft-assistant`. Finishes by curling
+Run from the laptop. Matches the house pattern the other five apps on the box
+use: a bare repo at `~/draft-assistant/repo.git`, a work tree checked out at
+`~/draft-assistant/checkout`, and a `prod` git remote
+(`paragon:/home/ec2-user/draft-assistant/repo.git`) already configured locally.
+The script does, in order: push to `origin/main` (the off-box copy), push to
+`prod main` (triggers the box's `post-receive` hook, which checks out, restarts
+`draft-assistant.service`, and retries a local health check for a few seconds),
+then — **client-side, not in the hook** — curls
 `https://draftiq.paragoncommerce.co/api/default-username` and requires
-200/302/401 back — anything else fails the script. A 401 here is the *healthy*
-answer (no session cookie was sent), so getting one means nginx, the SSO gate,
-and this app are all up; a connection failure or 5xx means they are not.
+200/302/401 back. A 401 here is the *healthy* answer (no session cookie was
+sent).
+
+The served-URL check runs in the script rather than the hook because **a
+post-receive hook cannot fail a push** — it runs after git has already
+accepted the refs, so `git push` returns 0 no matter what the hook prints. The
+hook is the early warning (it prints `DEGRADED` if its own restart/health-check
+fails); `deploy/push`'s own curl at the end is the actual gate, and is the part
+that can make you notice.
 
 **There is no CI deploy.** A `.github/workflows/deploy.yml` used to exist that
 looked like it auto-deployed on push to main; its script was literally
@@ -51,26 +62,23 @@ fixed, because turning on real auto-deploy-on-push to a live service is a
 decision for Larry, not something to wire up silently while cleaning up a lie.
 Deploy is a manual, deliberate step until someone decides otherwise.
 
-**How this was actually deployed until today:** an untracked `~/draft-assistant/deploy.sh`
-sitting only on the box (`git pull origin main && sudo systemctl restart
-draft-assistant`, no verification step). Pulled into the repo as `deploy/push`
-above and deleted from the box so there's one copy instead of two that can
-drift.
-
-**The box's git remote pointed at the wrong URL until today.** It cloned from
-`https://github.com/lfulk33/draft-assistant.git`; the repo was renamed to
-`draftiq` at some point and GitHub's rename-redirect was silently carrying the
-`git pull` through. That redirect is not permanent — it breaks the moment
-anyone else claims the name `draft-assistant` on GitHub. Repointed to
-`https://github.com/lfulk33/draftiq.git` (verified same commit history before
-and after the switch).
+**History, for anyone reading old commits:** this used to be an untracked
+`~/draft-assistant/deploy.sh` living only on the box (plain `git pull` into a
+regular clone, no bare repo, no verification step) — pulled into the repo once,
+then the parent thread migrated the box itself to the bare-repo/checkout
+layout at Larry's request on 2026-09-20 so this app would stop being the odd
+one out. Separately, the box's git remote briefly pointed at
+`https://github.com/lfulk33/draft-assistant.git` — the repo's name before a
+rename to `draftiq` — surviving only on GitHub's rename-redirect. Both fixed
+the same day; mentioned here in case either old shape shows up in a stale
+script or bookmark somewhere.
 
 ## Data — the section the parent relies on
 
 | Path | What it holds | Replaceable? |
 |---|---|---|
-| `players.json` (19MB) | Full Sleeper player DB | Yes — `sleeper_client.py`, cron-refreshed 03:00 daily |
-| `fantasy_players.json` (6.5MB) | FantasyCalc-enriched player values | Yes — `fantasycalc_client.py`, cron-refreshed 03:00 daily |
+| `players.json` (19MB) | Full Sleeper player DB | Yes — `sleeper_client.py`, cron-refreshed 03:00 daily from `checkout/` |
+| `fantasy_players.json` (6.5MB) | FantasyCalc-enriched player values | Yes — `fantasycalc_client.py`, cron-refreshed 03:00 daily from `checkout/` |
 | `season_stats_2023/24/25.json` | Real Sleeper season stats, for VORP calibration | Yes — `historical_stats.py:fetch_season_stats()` hits Sleeper's stats API directly. **Not on the cron** — refetches lazily when `historical_stats.py` runs and finds no cache, not on a schedule. |
 | `adp_2qb_14_2026.json`, `adp_ppr_12_2026.json` | Real ADP from FantasyFootballCalculator | Yes — `adp_client.py`, cached, refetches when stale. Not on the cron either. |
 | `beatadp_players.json` | Real Sleeper-platform ADP scraped from BeatADP | Yes — `beatadp_client.py`, same caching pattern. Fragile to BeatADP changing their page's internal JSON structure (documented in the file's own docstring), but that's a code-maintenance risk, not a backup gap. |
@@ -130,17 +138,16 @@ same-origin.
 
 ## Gotchas
 
-- **The box's checkout is a plain `git pull` clone, not the bare-repo +
-  `post-receive` pattern the other apps on this box use.** If you go looking
-  for `~/draft-assistant/repo.git`, it doesn't exist — there's just
-  `~/draft-assistant/` as a normal working tree, updated by `deploy/push`
-  sshing in and pulling directly.
-- **Two GitHub remote names for one repo**: this repo was renamed
-  `draft-assistant` → `draftiq` at some point. Any old clone, script, or
-  bookmark using the old name still silently works today via GitHub's
-  rename-redirect — until someone else registers that name, at which point it
-  breaks with no warning. If something references `draft-assistant.git`
-  anywhere, repoint it.
+- **`checkout/` has no `.git`.** It's a bare-repo work tree, not a normal
+  clone — `cd checkout && git log` fails with "not a git repository". Use
+  `git --git-dir=$HOME/draft-assistant/repo.git --work-tree=$HOME/draft-assistant/checkout <cmd>`
+  from the box, or just work from your laptop and `deploy/push` instead.
+- **The app's own JSON caches and `.env` live in `checkout/`, not the repo.**
+  `git checkout -f` in the post-receive hook leaves untracked files alone, so
+  deploys don't disturb them — but if you ever look for them at the old
+  top-level `~/draft-assistant/*.json` path from before the 2026-09-20
+  migration, they're gone from there; they're under `checkout/` now, and so
+  are the systemd `WorkingDirectory` and the 03:00 crontab's `cd`.
 - The Flask dev server (`python3 server.py` locally) runs with
   `use_reloader=False` — code edits during local dev need a manual
   kill+restart, there's no autoreload.
